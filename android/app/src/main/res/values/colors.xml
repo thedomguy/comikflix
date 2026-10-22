@@ -1,0 +1,5 @@
+<resources>
+    <!-- manifest.webmanifest: background_color and theme_color -->
+    <color name="bg">#141414</color>
+    <color name="brand">#E50914</color>
+</resources>

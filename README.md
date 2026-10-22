@@ -8,3 +8,7 @@
   the latest chapter's weekday counts. There is no other cadence and no interval estimate
   (`server.next_release`). If a series turns out not to be weekly, adapt the model then.
 - Chapters keep their exact publish time from the source (`chapters.published_at`).
+
+## Android
+
+`android/` is a WebView app around the live site, released through KT Remote; see `android/README.md`.
