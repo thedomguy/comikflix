@@ -242,19 +242,60 @@ export function mountReader(root, s, chap) {
     else startAutoplay();
   }
 
+  // A source page can be a single composited "long-strip" panel many screens tall
+  // (e.g. 900x16000). Some phones' GPUs refuse to paint a texture that tall: the image
+  // fetches and decodes fine (no onerror, correct naturalWidth/Height) but nothing ever
+  // shows, leaving a blank hole exactly that size. Past this height, decode the image
+  // (off-DOM) into vertical canvas tiles instead of one <img>, so no single paint surface
+  // is ever taller than TILE_MAX.
+  const TILE_MAX = 3000;
+
+  async function renderTiled(box, img, w, hgt) {
+    const tiles = [];
+    for (let y = 0; y < hgt; y += TILE_MAX) {
+      if (box._loadReq !== img) break; // unloaded mid-slice
+      const sliceH = Math.min(TILE_MAX, hgt - y);
+      let bitmap;
+      try {
+        bitmap = await createImageBitmap(img, 0, y, w, sliceH);
+      } catch {
+        break; // leave the remainder unrendered rather than throw
+      }
+      const canvas = h("canvas", { width: w, height: sliceH });
+      canvas.getContext("2d").drawImage(bitmap, 0, 0);
+      bitmap.close();
+      box.append(canvas);
+      tiles.push(canvas);
+    }
+    if (box._loadReq === img) box._tiles = tiles;
+    else tiles.forEach((c) => c.remove()); // unloaded while slicing
+  }
+
   function loadPage(box, attempt = 0) {
-    if (box._img) return;
-    const img = h("img", { alt: `Page ${box._n}`, decoding: "async" });
+    if (box._img || box._tiles || box._loadReq) return;
+    const img = new Image();
+    img.alt = `Page ${box._n}`;
+    img.decoding = "async";
+    box._loadReq = img;
     img.onload = () => {
-      const ratio = `${img.naturalWidth}/${img.naturalHeight}`;
+      if (box._loadReq !== img) return;
+      const w = img.naturalWidth, hgt = img.naturalHeight;
+      const ratio = `${w}/${hgt}`;
       box.style.aspectRatio = ratio;
       box._known = true;
       box.classList.remove("failed");
-      // No sizes from the source: pages of a chapter are mostly alike, so the first one
-      // that loads is a far better guess for the rest than 2:3.
-      if (!guessed) {
+      const huge = hgt > TILE_MAX;
+      // No sizes from the source: pages of a chapter are mostly alike, so the first
+      // ordinary one that loads is a far better guess for the rest than 2:3. A long-strip
+      // page's own giant ratio would be a terrible guess for the ordinary pages around it.
+      if (!guessed && !huge) {
         guessed = true;
         for (const b of pageEls) if (!b._known) b.style.aspectRatio = ratio;
+      }
+      if (huge) renderTiled(box, img, w, hgt);
+      else {
+        box._img = img;
+        box.append(img);
       }
       if (settle && performance.now() < settle.until) applyResume(settle.f);
       updateProgress();
@@ -263,10 +304,9 @@ export function mountReader(root, s, chap) {
     const src = box._pg.src;
     const url = attempt ? `${src}${src.includes("?") ? "&" : "?"}r=${attempt}` : src;
     img.onerror = () => {
-      // A replaced/unloaded image (its src was removed) must not touch the box any more.
-      if (box._img !== img) return;
-      box._img = null;
-      img.remove();
+      // A replaced/unloaded image must not touch the box any more.
+      if (box._loadReq !== img) return;
+      box._loadReq = null;
       if (attempt < 3) setTimeout(() => { if (box._want) loadPage(box, attempt + 1); }, 800 * (attempt + 1));
       else {
         box._known = true; // shown as a fixed-size retry box
@@ -281,14 +321,18 @@ export function mountReader(root, s, chap) {
     };
     if (box._n <= 2) img.fetchPriority = "high";
     img.src = url;
-    box._img = img;
-    box.append(img);
   }
   function unloadPage(box) {
-    if (!box._img) return;
-    box._img.removeAttribute("src");
-    box._img.remove();
-    box._img = null;
+    box._loadReq = null; // drop any in-flight decode/tiling so it discards itself
+    if (box._img) {
+      box._img.removeAttribute("src");
+      box._img.remove();
+      box._img = null;
+    }
+    if (box._tiles) {
+      for (const c of box._tiles) c.remove();
+      box._tiles = null;
+    }
   }
 
   const widthSlider = h("input", {
