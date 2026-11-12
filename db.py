@@ -159,6 +159,10 @@ CREATE TABLE IF NOT EXISTS series (
     locked_chapters_json TEXT,
     release_json TEXT,
     release_day INTEGER,
+    auto_check TEXT NOT NULL DEFAULT 'ingest',  -- off | check | ingest (background updates)
+    last_checked_at TEXT,                      -- last auto-check attempt
+    auto_check_error TEXT,                     -- last auto-check failure (cleared on success)
+    next_check_at TEXT,                        -- when the scheduler may touch this series again
     info_updated_at TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
@@ -289,6 +293,15 @@ def _ensure_columns(conn: sqlite3.Connection) -> None:
             "WHERE release_date IS NOT NULL"
         )
         conn.execute("ALTER TABLE series DROP COLUMN release_date")
+    # auto_check: background update mode — off | check (metadata only) | ingest (default).
+    if "auto_check" not in cols:
+        conn.execute("ALTER TABLE series ADD COLUMN auto_check TEXT NOT NULL DEFAULT 'ingest'")
+    if "last_checked_at" not in cols:
+        conn.execute("ALTER TABLE series ADD COLUMN last_checked_at TEXT")
+    if "auto_check_error" not in cols:
+        conn.execute("ALTER TABLE series ADD COLUMN auto_check_error TEXT")
+    if "next_check_at" not in cols:
+        conn.execute("ALTER TABLE series ADD COLUMN next_check_at TEXT")
 
 
 def init_schema(conn: sqlite3.Connection | None = None) -> None:
@@ -603,6 +616,7 @@ def _replace_pages(conn: sqlite3.Connection, series_slug: str, chapter_id: str, 
 
 
 SERIES_STATUSES = ("ongoing", "completed", "hiatus", "dropped")
+AUTO_CHECK_MODES = ("off", "check", "ingest")
 WEEKDAYS = ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")
 
 
@@ -619,10 +633,18 @@ def parse_weekday(val: Any) -> int | None:
     raise ValueError("release_day must be a weekday: 0 (Monday) to 6 (Sunday) or its name")
 
 
+def parse_auto_check(val: Any) -> str:
+    """off | check | ingest — background update mode for a library series."""
+    mode = str(val or "").strip().lower()
+    if mode not in AUTO_CHECK_MODES:
+        raise ValueError(f"auto_check must be one of {', '.join(AUTO_CHECK_MODES)}")
+    return mode
+
+
 def patch_series(slug: str, fields: dict) -> dict | None:
-    """Update editable series fields: release_day (the weekday chapters come out), and status
+    """Update editable series fields: release_day (the weekday chapters come out), status
     (set by hand it sticks through source refreshes; "auto" hands it back to the source, which
-    sets it on the next refresh)."""
+    sets it on the next refresh), and auto_check (off | check | ingest)."""
     allowed = {}
     if "status" in fields:
         val = str(fields["status"] or "auto").strip().lower()
@@ -634,6 +656,12 @@ def patch_series(slug: str, fields: dict) -> dict | None:
             raise ValueError(f"status must be one of {', '.join(SERIES_STATUSES)} or auto")
     if "release_day" in fields:
         allowed["release_day"] = parse_weekday(fields["release_day"])
+    if "auto_check" in fields:
+        allowed["auto_check"] = parse_auto_check(fields["auto_check"])
+        # Re-enable promptly: clear schedule/error so the next tick can pick it up.
+        if allowed["auto_check"] != "off":
+            allowed["next_check_at"] = None
+            allowed["auto_check_error"] = None
     if not allowed:
         row = get_conn().execute("SELECT slug FROM series WHERE slug = ?", (slug,)).fetchone()
         return {"slug": slug} if row else None
@@ -649,6 +677,22 @@ def patch_series(slug: str, fields: dict) -> dict | None:
         return None
     bump()
     return {"slug": slug, **{k: allowed[k] for k in allowed if k != "updated_at"}}
+
+
+def record_auto_check(
+    slug: str,
+    *,
+    next_check_at: str | None,
+    error: str | None = None,
+) -> None:
+    """Persist scheduler outcome for a series (last attempt time, next due, optional error)."""
+    with transaction() as conn:
+        conn.execute(
+            "UPDATE series SET last_checked_at = ?, next_check_at = ?, auto_check_error = ?, "
+            "updated_at = ? WHERE slug = ?",
+            (_now(), next_check_at, error, _now(), slug),
+        )
+    bump()
 
 
 def list_series_rows() -> list[sqlite3.Row]:

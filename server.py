@@ -31,6 +31,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
 import auth
+import auto_check
 import db
 import db_ingest
 import ingest
@@ -192,6 +193,9 @@ def scan_library() -> list[dict]:
             "alt_titles": alt_titles,
             "next_release": next_release(row["release_day"], [ch["published_at"] for ch in chapter_rows]),
             "release_day": row["release_day"],  # set by hand, 0=Mon … 6=Sun
+            "auto_check": row["auto_check"] if "auto_check" in row.keys() else "ingest",
+            "last_checked_at": row["last_checked_at"] if "last_checked_at" in row.keys() else None,
+            "auto_check_error": row["auto_check_error"] if "auto_check_error" in row.keys() else None,
             "remote_total": len(remote) if isinstance(remote, list) else None,
             "source_url": row["source_url"] or first_source_url,
             "poster": poster,
@@ -918,6 +922,7 @@ def main() -> None:
             print(f"Asura catalogue warm-up failed: {e}")
 
     threading.Thread(target=warm_catalog, name="catalog-warm", daemon=True).start()
+    auto_check.start(INGEST)  # polite background library updates (per-series auto_check mode)
     if not args.no_open:
         threading.Timer(0.5, webbrowser.open, args=(url,)).start()
     try:

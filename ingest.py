@@ -302,6 +302,44 @@ def chapter_complete(slug: str, chapter: str) -> bool:
     return db_ingest.chapter_is_ready(slug, chapter)
 
 
+def sync_series_metadata(slug: str) -> dict:
+    """Fetch the series page and write metadata + chapter list only (no chapter HTML).
+
+    Used by auto-check in `check` mode and as the first step of `ingest` mode.
+    """
+    slug = parse_slug(slug)
+    info = fetch_series_info(slug)
+    save_series_info(info)
+    return info
+
+
+def update_start_chapter(slug: str) -> float:
+    """First chapter number for an update: the highest ready chapter, or 1."""
+    rows = db.get_conn().execute(
+        "SELECT chapter_id FROM chapters WHERE series_slug = ? AND status = 'ready'",
+        (slug,),
+    ).fetchall()
+    max_id = 0.0
+    for r in rows:
+        try:
+            max_id = max(max_id, float(r["chapter_id"]))
+        except (TypeError, ValueError):
+            pass
+    return max_id if max_id > 0 else 1.0
+
+
+def chapters_needing_pages(info: dict) -> list[str]:
+    """Unlocked chapter numbers from scraped info that are not ready in SQLite yet."""
+    out = []
+    for c in info.get("chapters") or []:
+        if c.get("locked") or c.get("number") is None:
+            continue
+        number = str(c["number"])
+        if not chapter_complete(info["slug"], number):
+            out.append(number)
+    return out
+
+
 def _page_files(chap_dir: Path) -> list[Path]:
     files = [
         p for p in chap_dir.iterdir()
@@ -539,8 +577,14 @@ class IngestManager:
         latest: int | None = None,
         source: str = "app",
         tags: list[str] | None = None,
+        *,
+        info: dict | None = None,
     ) -> dict:
-        """source: who asked ("app", "jarvis:chatgpt", ...); tags are kept with the job's history."""
+        """source: who asked ("app", "jarvis:chatgpt", ...); tags are kept with the job's history.
+
+        Pass `info` (from fetch_series_info / sync_series_metadata) to skip a second series-page
+        fetch — used by auto-check after it already refreshed metadata.
+        """
         slug = parse_slug(slug)
         try:
             start = float(start_chapter)
@@ -552,6 +596,8 @@ class IngestManager:
             raise ValueError(f"Latest chapter must be between 1 and {MAX_CHAPTERS}")
         if latest is not None and float(latest) < start:
             raise ValueError("latest must be >= start_chapter")
+        if info is not None:
+            slug = parse_slug(info.get("slug") or slug)
         with self._lock:
             if any(j["slug"] == slug and j["state"] == "running" for j in self._jobs.values()):
                 raise ValueError("An ingestion for this series is already running")
@@ -571,6 +617,7 @@ class IngestManager:
                 "log": [],
                 "source": source,
                 "tags": tags or [],
+                "prefetched": info,
             }
             self._jobs[job["id"]] = job
             self._cancels[job["id"]] = threading.Event()
@@ -613,7 +660,11 @@ class IngestManager:
     def snapshot(self, job_id: str) -> dict | None:
         with self._lock:
             job = self._jobs.get(job_id)
-            return copy.deepcopy(job) if job else None
+            if not job:
+                return None
+            snap = copy.deepcopy(job)
+            snap.pop("prefetched", None)
+            return snap
 
     def list(self, log_lines: int = 80) -> list[dict]:
         with self._lock:
@@ -621,9 +672,28 @@ class IngestManager:
             out = []
             for j in jobs:
                 snap = copy.deepcopy(j)
+                snap.pop("prefetched", None)
                 snap["log"] = snap["log"][-log_lines:]
                 out.append(snap)
             return out
+
+    def is_running(self, slug: str | None = None) -> bool:
+        """True if any job is running, or (when slug set) a job for that series."""
+        with self._lock:
+            for j in self._jobs.values():
+                if j["state"] != "running":
+                    continue
+                if slug is None or j["slug"] == slug:
+                    return True
+            return False
+
+    def has_manual_running(self) -> bool:
+        """True if a non-auto ingest job is running (user/Jarvis) — auto-check stays idle."""
+        with self._lock:
+            return any(
+                j["state"] == "running" and not str(j.get("source") or "").startswith("auto")
+                for j in self._jobs.values()
+            )
 
     # -- internals
 
@@ -678,16 +748,20 @@ class IngestManager:
 
     def _run(self, job: dict) -> None:
         slug = job["slug"]
+        info = job.pop("prefetched", None)
 
-        self._log(job, "info", f"Fetching series info for {slug}")
-        try:
-            info = fetch_series_info(slug)
-            save_series_info(info)  # metadata + chapter rows; no R2
-        except Exception as e:
-            self._log(job, "error", f"Could not read series: {_error_text(e)}")
-            with self._lock:
-                job.update(state="error", error=_error_text(e), finished=time.time(), stage="Failed")
-            return
+        if info is not None:
+            self._log(job, "info", f"Using prefetched series info for {slug}")
+        else:
+            self._log(job, "info", f"Fetching series info for {slug}")
+            try:
+                info = fetch_series_info(slug)
+                save_series_info(info)  # metadata + chapter rows; no R2
+            except Exception as e:
+                self._log(job, "error", f"Could not read series: {_error_text(e)}")
+                with self._lock:
+                    job.update(state="error", error=_error_text(e), finished=time.time(), stage="Failed")
+                return
 
         if info["slug"] != slug:
             self._log(job, "info", f"Asura moved this series to {info['slug']}; library updated to match")

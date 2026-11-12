@@ -40,6 +40,10 @@ export interface Series {
   alt_titles: string[];
   next_release: ReleaseForecast | null;
   release_day: number | null; // set by hand, 0=Mon … 6=Sun
+  /** Background updates: off | check (metadata only) | ingest (default). */
+  auto_check?: "off" | "check" | "ingest";
+  last_checked_at?: string | null; // ISO; last auto-check attempt
+  auto_check_error?: string | null;
   remote_total: number | null; // chapters on the source (incl. not fetched)
   source_url: string | null;
   poster: string | null;

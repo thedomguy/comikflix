@@ -153,6 +153,7 @@ function Sheet({
               </div>
             )}
             <ReleaseDay s={s} refresh={refresh} />
+            {!ended && <AutoCheck s={s} refresh={refresh} />}
             {nextRel && (
               <div>
                 Next chapter: <span>{nextRel}</span>
@@ -197,6 +198,87 @@ function useUpToDate(slug: string, jobs: LiveJob[]) {
     return () => clearTimeout(t);
   }, [id]);
   return !!id && shown === id;
+}
+
+const AUTO_CHECK_OPTS: { value: "off" | "check" | "ingest"; label: string }[] = [
+  { value: "off", label: "Off" },
+  { value: "check", label: "Check only" },
+  { value: "ingest", label: "Check + ingest" },
+];
+
+function checkedAgo(iso: string | null | undefined): string | null {
+  if (!iso) return null;
+  const t = Date.parse(iso);
+  if (!Number.isFinite(t)) return null;
+  const mins = Math.round((Date.now() - t) / 60_000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.round(mins / 60);
+  if (hours < 48) return `${hours}h ago`;
+  return `${Math.round(hours / 24)}d ago`;
+}
+
+/** Background update mode: Off / Check only (list) / Check + ingest (default). */
+function AutoCheck({ s, refresh }: { s: Series; refresh: () => Promise<void> }) {
+  const current = s.auto_check || "ingest";
+  const [value, setValue] = useState(current);
+  const [hint, setHint] = useState<{ text: string; cls: string }>({ text: "", cls: "" });
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => setValue(s.auto_check || "ingest"), [s.auto_check]);
+
+  const save = async () => {
+    setSaving(true);
+    setHint({ text: "Saving…", cls: "" });
+    try {
+      await api(`/api/series/${encodeURIComponent(s.slug)}`, { method: "PATCH", json: { auto_check: value } });
+      const label = AUTO_CHECK_OPTS.find((o) => o.value === value)?.label || value;
+      setHint({ text: label, cls: "ok" });
+      toast(`Auto-check: ${label}`);
+      refresh();
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Could not save";
+      setHint({ text: msg, cls: "err" });
+      toast(msg);
+    }
+    setSaving(false);
+  };
+
+  const ago = checkedAgo(s.last_checked_at);
+  const status =
+    s.auto_check_error
+      ? `Last check failed${ago ? ` (${ago})` : ""}`
+      : ago
+        ? `Checked ${ago}`
+        : current === "off"
+          ? "Disabled"
+          : "Not checked yet";
+
+  return (
+    <div className="release-row">
+      <div className="release-label">Auto-check:</div>
+      <div className="release-edit">
+        <select
+          className="release-input"
+          value={value}
+          onChange={(e) => setValue(e.target.value as "off" | "check" | "ingest")}
+          aria-label="Auto-check mode"
+        >
+          {AUTO_CHECK_OPTS.map((o) => (
+            <option key={o.value} value={o.value}>
+              {o.label}
+            </option>
+          ))}
+        </select>
+        <button type="button" className="release-save" disabled={saving || value === current} onClick={save}>
+          Save
+        </button>
+        <span className={`release-hint${hint.cls ? ` ${hint.cls}` : ""}${s.auto_check_error && !hint.cls ? " err" : ""}`}>
+          {hint.text || status}
+        </span>
+      </div>
+    </div>
+  );
 }
 
 /** The weekday chapters come out; unset, the latest chapter's weekday counts (server.next_release). */
