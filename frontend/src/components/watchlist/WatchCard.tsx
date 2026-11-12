@@ -1,5 +1,6 @@
-import { bg, thumb } from "../../lib/format";
+import { thumb } from "../../lib/format";
 import type { WatchEntry } from "../../lib/types";
+import { CoverImg } from "../CoverImg";
 import { IconCloud } from "../icons";
 import { Stars } from "../Stars";
 
@@ -7,7 +8,8 @@ import { Stars } from "../Stars";
 export function WatchCard({ e }: { e: WatchEntry }) {
   const cover = thumb(e.cover_url, 400);
   return (
-    <a className="card wl-card" href={`#/list/${e.id}`} style={{ backgroundImage: bg(cover) }}>
+    <a className="card wl-card" href={`#/list/${e.id}`}>
+      <CoverImg className="card-poster" src={cover} />
       {!cover && <span className="cover-text">{e.title.slice(0, 1)}</span>}
       <span className="card-ico" title="Not downloaded" aria-label="Not downloaded">
         <IconCloud />

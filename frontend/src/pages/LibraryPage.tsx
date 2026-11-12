@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { ago, bg, fmtDate } from "../lib/format";
+import { ago, fmtDate } from "../lib/format";
 import {
   activeFilterCount,
   DEFAULT_VIEW,
@@ -15,6 +15,7 @@ import {
 import { useLibrary } from "../lib/library";
 import { chapterCount, latestChapter, progressOf, unreadCount } from "../lib/series";
 import type { Series } from "../lib/types";
+import { CoverImg } from "../components/CoverImg";
 import { SeriesCard } from "../components/SeriesCard";
 import { FilterPanel } from "../components/library/FilterPanel";
 import "../styles/library.css";
@@ -149,7 +150,9 @@ function ListView({ list, sort, onSort }: { list: Series[]; sort: SortKey; onSor
         const last = latestChapter(s);
         return (
           <a key={s.slug} className="lib-row" href={`#/series/${s.slug}`}>
-            <span className="lib-cover" style={{ backgroundImage: bg(s.poster) }} />
+            <span className="lib-cover">
+              <CoverImg src={s.poster} fallback={s.backdrop} />
+            </span>
             <span className="lib-title">
               <b>{s.title}</b>
               <small>{[s.type, (s.genres || []).slice(0, 3).join(", ")].filter(Boolean).join(" · ")}</small>

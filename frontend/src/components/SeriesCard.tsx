@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type MouseEvent } from "react";
-import { bg } from "../lib/format";
+import { CoverImg } from "./CoverImg";
 import { HoverCard } from "./HoverCard";
 import { chapterCount, newSinceRead, progressOf, unreadCount } from "../lib/series";
 import type { Series } from "../lib/types";
@@ -19,10 +19,10 @@ export function SeriesCard({ s, onClick }: { s: Series; onClick?: () => void }) 
       onMouseLeave={hover.leave}
       role="link"
       tabIndex={0}
-      style={{ backgroundImage: bg(s.poster) }}
       onClick={onClick ?? (() => (location.hash = `#/series/${s.slug}`))}
       onKeyDown={(e) => e.key === "Enter" && (e.currentTarget as HTMLElement).click()}
     >
+      <CoverImg className="card-poster" src={s.poster} fallback={s.backdrop} />
       {fresh > 0 ? (
         <span className="card-badge new">{fresh} new</span>
       ) : unread > 0 ? (
