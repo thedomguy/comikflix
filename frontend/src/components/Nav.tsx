@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { go, useRoute } from "../lib/route";
-import { IconCalendar, IconDownload, IconLibrary, IconList, IconRemote, IconSearch } from "./icons";
+import { IconCalendar, IconDownload, IconLibrary, IconList, IconLock, IconRemote, IconSearch } from "./icons";
 import { InstallButton } from "./InstallButton";
 
 /** Top bar on browse pages (hidden in the reader, remote, and the mobile series page).
@@ -41,6 +41,7 @@ export function Nav({ onAdd }: { onAdd: () => void }) {
         </span>
         {link("#/downloads", "downloads", "Downloads", <IconDownload />)}
         {link("#/remote", "remote", "Remote control", <IconRemote />)}
+        {link("#/vault", "vault", "Private", <IconLock />)}
         <InstallButton />
         <button className="addbtn" onClick={onAdd}>+ Add</button>
       </div>

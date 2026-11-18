@@ -44,6 +44,7 @@ export interface Series {
   auto_check?: "off" | "check" | "ingest";
   last_checked_at?: string | null; // ISO; last auto-check attempt
   auto_check_error?: string | null;
+  private?: boolean; // in the private vault (More → Private), hidden from the normal screens
   remote_total: number | null; // chapters on the source (incl. not fetched)
   source_url: string | null;
   poster: string | null;

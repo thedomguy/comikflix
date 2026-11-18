@@ -16,6 +16,9 @@ export const IconDownload = () => (
 export const IconRemote = () => (
   <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="2.5" width="10" height="19" rx="3" {...P} /><circle cx="12" cy="8" r="2" fill="currentColor" /><path d="M10 14h4M10 17h4" {...P} /></svg>
 );
+export const IconLock = () => (
+  <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="10.5" width="14" height="10" rx="2" {...P} /><path d="M8 10.5V7.5a4 4 0 0 1 8 0v3" {...P} /></svg>
+);
 export const IconHome = () => (
   <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6h-6v6H4a1 1 0 0 1-1-1z" {...P} /></svg>
 );

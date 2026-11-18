@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import type { Route } from "../lib/route";
-import { IconCalendar, IconDownload, IconHome, IconLibrary, IconList, IconRemote, IconSearch } from "./icons";
+import { IconCalendar, IconDownload, IconHome, IconLibrary, IconList, IconLock, IconRemote, IconSearch } from "./icons";
 import { InstallButton } from "./InstallButton";
 
 const IconMore = () => (
@@ -23,7 +23,7 @@ const TABS = [
   { view: "search", hash: "#/search", label: "Search", icon: <IconSearch /> },
   { view: "calendar", hash: "#/calendar", label: "Calendar", icon: <IconCalendar /> },
 ];
-const MORE_VIEWS = new Set(["downloads", "remote"]);
+const MORE_VIEWS = new Set(["downloads", "remote", "vault"]);
 
 /** Mobile bottom navigation (replaces the top nav at ≤700px), with a "More" action sheet. */
 export function TabBar({ route, onAdd }: { route: Route; onAdd: () => void }) {
@@ -67,6 +67,9 @@ export function TabBar({ route, onAdd }: { route: Route; onAdd: () => void }) {
             </a>
             <a className="sheet-item" href="#/remote" role="menuitem">
               <IconRemote /> Remote control
+            </a>
+            <a className="sheet-item" href="#/vault" role="menuitem">
+              <IconLock /> Private
             </a>
             <button
               className="sheet-item"

@@ -196,6 +196,7 @@ def scan_library() -> list[dict]:
             "auto_check": row["auto_check"] if "auto_check" in row.keys() else "ingest",
             "last_checked_at": row["last_checked_at"] if "last_checked_at" in row.keys() else None,
             "auto_check_error": row["auto_check_error"] if "auto_check_error" in row.keys() else None,
+            "private": bool(row["private"]) if "private" in row.keys() else False,
             "remote_total": len(remote) if isinstance(remote, list) else None,
             "source_url": row["source_url"] or first_source_url,
             "poster": poster,

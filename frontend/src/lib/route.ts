@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 
 /** Hash routes (kept from the original app; Jarvis and the remote send these):
  *  #/  #/library  #/search?q=  #/calendar[/YYYY-MM]  #/series/<slug>  #/read/<slug>/<chapter>
- *  #/remote[/<screenId>]  #/downloads  #/list[/<entryId>|/new][?status=&sort=]
+ *  #/remote[/<screenId>]  #/downloads  #/vault (private series)  #/list[/<entryId>|/new][?status=&sort=]
  *  #/continue/<slug> (opens whatever Continue points at; see ContinueRedirect in App) */
 export interface Route {
   view: string; // "" (home), "library", "search", "calendar", "series", "read", "remote", "downloads"

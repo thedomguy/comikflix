@@ -163,6 +163,7 @@ CREATE TABLE IF NOT EXISTS series (
     last_checked_at TEXT,                      -- last auto-check attempt
     auto_check_error TEXT,                     -- last auto-check failure (cleared on success)
     next_check_at TEXT,                        -- when the scheduler may touch this series again
+    private INTEGER NOT NULL DEFAULT 0,        -- kept in the private vault, off the normal screens
     info_updated_at TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
@@ -302,6 +303,9 @@ def _ensure_columns(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE series ADD COLUMN auto_check_error TEXT")
     if "next_check_at" not in cols:
         conn.execute("ALTER TABLE series ADD COLUMN next_check_at TEXT")
+    # private: the series lives in the vault (More → Private), hidden from Home/Library/etc.
+    if "private" not in cols:
+        conn.execute("ALTER TABLE series ADD COLUMN private INTEGER NOT NULL DEFAULT 0")
 
 
 def init_schema(conn: sqlite3.Connection | None = None) -> None:
@@ -644,8 +648,10 @@ def parse_auto_check(val: Any) -> str:
 def patch_series(slug: str, fields: dict) -> dict | None:
     """Update editable series fields: release_day (the weekday chapters come out), status
     (set by hand it sticks through source refreshes; "auto" hands it back to the source, which
-    sets it on the next refresh), and auto_check (off | check | ingest)."""
+    sets it on the next refresh), auto_check (off | check | ingest), and private (vault)."""
     allowed = {}
+    if "private" in fields:
+        allowed["private"] = 1 if fields["private"] in (True, 1, "1", "true") else 0
     if "status" in fields:
         val = str(fields["status"] or "auto").strip().lower()
         if val == "auto":

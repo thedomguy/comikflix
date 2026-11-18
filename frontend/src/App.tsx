@@ -21,6 +21,7 @@ import ReaderPage from "./pages/ReaderPage";
 import RemotePage from "./pages/RemotePage";
 import DownloadsPage from "./pages/DownloadsPage";
 import WatchlistPage from "./pages/WatchlistPage";
+import VaultPage from "./pages/VaultPage";
 import { startWatchlist } from "./lib/watchlist";
 import LoginPage from "./pages/LoginPage";
 
@@ -159,6 +160,7 @@ function Shell() {
   else if (view === "search") page = <SearchPage q={query.get("q") || ""} />;
   else if (view === "calendar") page = <CalendarPage month={parts[0]} />;
   else if (view === "downloads") page = <DownloadsPage />;
+  else if (view === "vault") page = <VaultPage />;
   else if (view === "list") page = <WatchlistPage id={parts[0]} query={query} />;
   else if (view === "continue") page = <ContinueRedirect slug={parts[0]} />;
   else page = <HomePage />;
@@ -191,6 +193,6 @@ function ContinueRedirect({ slug }: { slug?: string }) {
 }
 
 /** How deep a screen sits (tabs = 0): deeper slides in from the right, shallower slides back. */
-const DEPTH: Record<string, number> = { "": 0, library: 0, list: 0, search: 0, calendar: 0, series: 1, downloads: 1, remote: 1, read: 2 };
+const DEPTH: Record<string, number> = { "": 0, library: 0, list: 0, search: 0, calendar: 0, series: 1, downloads: 1, remote: 1, vault: 1, read: 2 };
 /** Compact title shown on phones once the page's large title scrolls away. */
-const TITLES: Record<string, string> = { library: "Library", list: "Watch List", calendar: "Calendar", downloads: "Downloads" };
+const TITLES: Record<string, string> = { library: "Library", list: "Watch List", calendar: "Calendar", downloads: "Downloads", vault: "Private" };

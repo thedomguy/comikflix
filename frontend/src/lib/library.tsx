@@ -6,7 +6,10 @@ import { store } from "./store";
 import type { Series } from "./types";
 
 interface LibraryState {
+  /** Everything outside the private vault (what Home, Library, Search, Calendar show). */
   library: Series[];
+  /** Series marked private: only the vault page (More → Private) lists them. */
+  vault: Series[];
   ready: boolean;
   error: string | null;
   /** Re-fetch /api/library (after an ingest, a release-date edit, ...). */
@@ -46,7 +49,7 @@ export function preloadLibrary() {
 }
 
 export function LibraryProvider({ children }: { children: ReactNode }) {
-  const [library, setLibrary] = useState<Series[]>([]);
+  const [all, setAll] = useState<Series[]>([]);
   const [ready, setReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [progressVersion, setProgressVersion] = useState(0);
@@ -60,7 +63,7 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
       // progress too, and without it the series would look never started (and leave Home's rows).
       const [data] = await Promise.all([(pre && (await pre)) || fetchLibrary(), store.refreshProgress()]);
       ref.current = data;
-      setLibrary(data);
+      setAll(data);
       setError(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not load the library");
@@ -75,11 +78,14 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
     return () => window.removeEventListener("comikflix:progress", onProgress);
   }, [refresh]);
 
+  // Lookups by slug cover the vault too, so its series and reader pages open normally.
   const bySlug = useCallback((slug: string | undefined) => ref.current.find((s) => s.slug === slug), []);
+  const library = useMemo(() => all.filter((s) => !s.private), [all]);
+  const vault = useMemo(() => all.filter((s) => s.private), [all]);
 
   const value = useMemo(
-    () => ({ library, ready, error, refresh, bySlug, progressVersion }),
-    [library, ready, error, refresh, bySlug, progressVersion],
+    () => ({ library, vault, ready, error, refresh, bySlug, progressVersion }),
+    [library, vault, ready, error, refresh, bySlug, progressVersion],
   );
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }
@@ -93,7 +99,8 @@ export function useLibrary() {
 /** Current library for non-React code (screen.js). */
 export let libraryRef: { current: Series[] } = { current: [] };
 export function LibraryRefSync() {
-  const { library } = useLibrary();
-  libraryRef.current = library;
+  const { library, vault } = useLibrary();
+  // Remote screens look series up by slug, so vault series must be findable here too.
+  libraryRef.current = vault.length ? [...library, ...vault] : library;
   return null;
 }

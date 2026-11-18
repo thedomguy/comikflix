@@ -154,6 +154,7 @@ function Sheet({
             )}
             <ReleaseDay s={s} refresh={refresh} />
             {!ended && <AutoCheck s={s} refresh={refresh} />}
+            <PrivateToggle s={s} refresh={refresh} />
             {nextRel && (
               <div>
                 Next chapter: <span>{nextRel}</span>
@@ -216,6 +217,33 @@ function checkedAgo(iso: string | null | undefined): string | null {
   const hours = Math.round(mins / 60);
   if (hours < 48) return `${hours}h ago`;
   return `${Math.round(hours / 24)}d ago`;
+}
+
+/** Moves the series into (or out of) the private vault: More → Private. */
+function PrivateToggle({ s, refresh }: { s: Series; refresh: () => Promise<void> }) {
+  const [saving, setSaving] = useState(false);
+  const flip = async () => {
+    setSaving(true);
+    try {
+      await api(`/api/series/${encodeURIComponent(s.slug)}`, { method: "PATCH", json: { private: !s.private } });
+      toast(s.private ? "Moved back to the library" : "Moved to Private");
+      await refresh();
+    } catch (e) {
+      toast(e instanceof Error ? e.message : "Could not save");
+    }
+    setSaving(false);
+  };
+  return (
+    <div className="release-row">
+      <div className="release-label">Private:</div>
+      <div className="release-edit">
+        <button type="button" className="release-save" disabled={saving} onClick={flip}>
+          {s.private ? "Remove from Private" : "Move to Private"}
+        </button>
+        <span className="release-hint">{s.private ? "Only shown under More → Private" : ""}</span>
+      </div>
+    </div>
+  );
 }
 
 /** Background update mode: Off / Check only (list) / Check + ingest (default). */
