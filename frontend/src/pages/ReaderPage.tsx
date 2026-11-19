@@ -4,6 +4,7 @@ import { useLibrary } from "../lib/library";
 import { withBase } from "../lib/paths";
 import type { Chapter, Page, Series } from "../lib/types";
 import { mountReader } from "../components/reader/mountReader";
+import { enterImmersive, exitImmersive } from "../native/immersive";
 
 // Pages fetched this session, so going back to a chapter doesn't refetch its list.
 const pageCache = new Map<string, Page[]>();
@@ -29,8 +30,10 @@ export default function ReaderPage({ slug, chapter }: { slug: string; chapter: s
 
   useEffect(() => {
     document.body.style.overflow = "hidden";
+    enterImmersive();
     return () => {
       document.body.style.overflow = "";
+      exitImmersive();
     };
   }, []);
 
