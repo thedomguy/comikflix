@@ -9,6 +9,7 @@ import json
 import os
 import sqlite3
 import threading
+import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -267,6 +268,36 @@ CREATE TABLE IF NOT EXISTS watchlist (
 
 CREATE INDEX IF NOT EXISTS idx_chapters_series ON chapters(series_slug);
 CREATE INDEX IF NOT EXISTS idx_pages_chapter ON pages(series_slug, chapter_id);
+
+-- Canonical comic identity, additive and alongside `series` (which stays the keying table for
+-- chapters/pages/progress/watchlist). One comic can have several source mappings (one per
+-- provider); `primary_slug` is whichever one is currently backing reading. See providers/switch.py.
+CREATE TABLE IF NOT EXISTS comics (
+    id TEXT PRIMARY KEY,
+    primary_slug TEXT,
+    title TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS comic_sources (
+    id TEXT PRIMARY KEY,
+    comic_id TEXT NOT NULL REFERENCES comics(id) ON DELETE CASCADE,
+    provider TEXT NOT NULL,
+    provider_series_id TEXT NOT NULL,
+    series_slug TEXT,
+    url TEXT,
+    language TEXT,
+    chapter_count INTEGER,
+    availability TEXT NOT NULL DEFAULT 'unknown',
+    is_active INTEGER NOT NULL DEFAULT 0,
+    last_checked_at TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE (provider, provider_series_id)
+);
+CREATE INDEX IF NOT EXISTS idx_comic_sources_comic ON comic_sources(comic_id);
+CREATE INDEX IF NOT EXISTS idx_comic_sources_slug ON comic_sources(series_slug);
 """
 
 
@@ -556,7 +587,159 @@ def upsert_series(row: dict) -> None:
                 row.get("updated_at") or now,
             ),
         )
+        _ensure_comic(conn, slug, row.get("title") or slug)
     bump()
+
+
+# ---- canonical comic identity (additive; series/chapters/pages/progress/watchlist still key
+# off series.slug as before) ----
+
+_SOURCE_PREFIXES = (("mgeko-", "mgeko"), ("mangadex-", "mangadex"), ("comick-", "comick"))
+
+
+def provider_for_slug(slug: str) -> str:
+    low = (slug or "").lower()
+    for prefix, name in _SOURCE_PREFIXES:
+        if low.startswith(prefix):
+            return name
+    return "asura"
+
+
+def _ensure_comic(conn: sqlite3.Connection, slug: str, title: str) -> str:
+    """Idempotent: make sure `slug` has a comics row + an active comic_sources row. Called from
+    inside upsert_series's transaction, so every series ever written gets one lazily — plus an
+    explicit one-time backfill_comic_identities() at startup for series already in the DB."""
+    now = _now()
+    row = conn.execute(
+        "SELECT comic_id FROM comic_sources WHERE series_slug = ?", (slug,)
+    ).fetchone()
+    if row:
+        comic_id = row["comic_id"]
+        conn.execute("UPDATE comics SET title = ?, updated_at = ? WHERE id = ? AND primary_slug = ?",
+                     (title, now, comic_id, slug))
+        conn.execute(
+            "UPDATE comic_sources SET updated_at = ? WHERE comic_id = ? AND series_slug = ?",
+            (now, comic_id, slug),
+        )
+        return comic_id
+    comic_id = uuid.uuid4().hex
+    conn.execute(
+        "INSERT INTO comics (id, primary_slug, title, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+        (comic_id, slug, title, now, now),
+    )
+    provider = provider_for_slug(slug)
+    provider_series_id = slug[len(provider) + 1:] if provider != "asura" and "-" in slug else slug
+    conn.execute(
+        """
+        INSERT INTO comic_sources (
+            id, comic_id, provider, provider_series_id, series_slug, availability,
+            is_active, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, 'available', 1, ?, ?)
+        ON CONFLICT(provider, provider_series_id) DO UPDATE SET
+            comic_id = excluded.comic_id, series_slug = excluded.series_slug,
+            is_active = 1, updated_at = excluded.updated_at
+        """,
+        (uuid.uuid4().hex, comic_id, provider, provider_series_id, slug, now, now),
+    )
+    return comic_id
+
+
+def backfill_comic_identities() -> int:
+    """One-time (idempotent, safe to call every startup) pass: every series without a comic
+    yet gets one. Returns how many were created."""
+    with transaction() as conn:
+        slugs = [r["slug"] for r in conn.execute(
+            "SELECT slug FROM series WHERE slug NOT IN (SELECT series_slug FROM comic_sources WHERE series_slug IS NOT NULL)"
+        ).fetchall()]
+        for slug in slugs:
+            title = conn.execute("SELECT title FROM series WHERE slug = ?", (slug,)).fetchone()
+            _ensure_comic(conn, slug, (title["title"] if title else None) or slug)
+    return len(slugs)
+
+
+def series_exists(slug: str) -> bool:
+    return bool(get_conn().execute("SELECT 1 FROM series WHERE slug = ?", (slug,)).fetchone())
+
+
+def _comic_row_to_dict(conn: sqlite3.Connection, row: sqlite3.Row) -> dict:
+    sources = conn.execute(
+        "SELECT * FROM comic_sources WHERE comic_id = ? ORDER BY is_active DESC, provider", (row["id"],)
+    ).fetchall()
+    return {
+        "id": row["id"],
+        "title": row["title"],
+        "primary_slug": row["primary_slug"],
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+        "sources": [
+            {
+                "provider": s["provider"],
+                "provider_series_id": s["provider_series_id"],
+                "series_slug": s["series_slug"],
+                "url": s["url"],
+                "language": s["language"],
+                "chapter_count": s["chapter_count"],
+                "availability": s["availability"],
+                "is_active": bool(s["is_active"]),
+                "last_checked_at": s["last_checked_at"],
+            }
+            for s in sources
+        ],
+    }
+
+
+def get_comic(comic_id: str) -> dict | None:
+    conn = get_conn()
+    row = conn.execute("SELECT * FROM comics WHERE id = ?", (comic_id,)).fetchone()
+    return _comic_row_to_dict(conn, row) if row else None
+
+
+def get_comic_by_slug(slug: str) -> dict | None:
+    conn = get_conn()
+    row = conn.execute(
+        "SELECT c.* FROM comics c JOIN comic_sources s ON s.comic_id = c.id "
+        "WHERE s.series_slug = ? OR c.primary_slug = ? LIMIT 1",
+        (slug, slug),
+    ).fetchone()
+    return _comic_row_to_dict(conn, row) if row else None
+
+
+def list_comics() -> list[dict]:
+    conn = get_conn()
+    rows = conn.execute("SELECT * FROM comics ORDER BY title COLLATE NOCASE").fetchall()
+    return [_comic_row_to_dict(conn, r) for r in rows]
+
+
+def merge_comics(keep_id: str, other_id: str) -> None:
+    """Fold `other_id`'s sources into `keep_id` (used when switching sources resolves to a
+    comic row that got auto-created for a series the user hadn't linked yet) and drop `other_id`."""
+    if keep_id == other_id:
+        return
+    with transaction() as conn:
+        others = conn.execute("SELECT * FROM comic_sources WHERE comic_id = ?", (other_id,)).fetchall()
+        for s in others:
+            dup = conn.execute(
+                "SELECT id FROM comic_sources WHERE comic_id = ? AND provider = ? AND provider_series_id = ?",
+                (keep_id, s["provider"], s["provider_series_id"]),
+            ).fetchone()
+            if dup:
+                conn.execute("DELETE FROM comic_sources WHERE id = ?", (s["id"],))
+            else:
+                conn.execute("UPDATE comic_sources SET comic_id = ? WHERE id = ?", (keep_id, s["id"]))
+        conn.execute("DELETE FROM comics WHERE id = ?", (other_id,))
+
+
+def set_comic_primary(comic_id: str, slug: str) -> None:
+    with transaction() as conn:
+        conn.execute("UPDATE comics SET primary_slug = ?, updated_at = ? WHERE id = ?", (slug, _now(), comic_id))
+
+
+def set_source_active(comic_id: str, slug: str, active: bool) -> None:
+    with transaction() as conn:
+        conn.execute(
+            "UPDATE comic_sources SET is_active = ?, updated_at = ? WHERE comic_id = ? AND series_slug = ?",
+            (1 if active else 0, _now(), comic_id, slug),
+        )
 
 
 def upsert_chapter(row: dict, pages: list[dict] | None = None) -> None:

@@ -34,8 +34,12 @@ import auth
 import auto_check
 import db
 import db_ingest
+import federated_search
 import ingest
+import mangadex
 import mgeko
+import providers.registry as registry
+import providers.switch as provider_switch
 import r2
 import remote
 import watchlist
@@ -44,6 +48,7 @@ HERE = Path(__file__).resolve().parent
 # The React app (frontend/, `npm run build`) builds into web-dist/.
 WEB = HERE / (os.environ.get("COMIKFLIX_WEB") or "web-dist")
 INGEST = ingest.IngestManager()
+MANGADEX_IMAGE_PREFIX = "/api/mangadex/image/"
 
 # PWA / static MIME fixes
 mimetypes.add_type("application/manifest+json", ".webmanifest")
@@ -57,8 +62,10 @@ def title_from_slug(slug: str) -> str:
 
 
 def _page_src(cdn_url: str | None) -> str | None:
-    """Scraped Asura CDN url only (R2/local binaries ignored for now; nothing is guessed)."""
-    if cdn_url and str(cdn_url).startswith("http"):
+    """Scraped CDN url, or our own same-origin MangaDex image proxy path (never a raw MangaDex
+    URL — see MANGADEX_IMAGE_PREFIX). Nothing else is guessed."""
+    cdn_url = str(cdn_url) if cdn_url else None
+    if cdn_url and (cdn_url.startswith("http") or cdn_url.startswith(MANGADEX_IMAGE_PREFIX)):
         return cdn_url
     return None
 
@@ -418,6 +425,22 @@ class Handler(SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+    def _send_mangadex_image(self, chapter_id: str, quality: str, filename: str) -> None:
+        """Fetch a MangaDex page server-side and stream it to the browser: MangaDex's terms
+        require images never be hotlinked directly from a third-party app's pages."""
+        if not re.fullmatch(r"[0-9a-f-]{20,40}", chapter_id) or ".." in filename or "/" in filename:
+            return self.send_error(HTTPStatus.BAD_REQUEST, "bad request")
+        try:
+            data, ctype = mangadex.fetch_image(chapter_id, quality, filename)
+        except Exception as e:
+            return self.send_json({"error": f"MangaDex image unavailable: {e}"}, HTTPStatus.BAD_GATEWAY)
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "public, max-age=86400")
+        self.end_headers()
+        self.wfile.write(data)
+
     # ---- auth ----
 
     def client_ip(self) -> str:
@@ -600,14 +623,37 @@ class Handler(SimpleHTTPRequestHandler):
         if path == "/api/catalog":
             qs = parse_qs(urlparse(self.path).query)
             q = qs.get("q", [""])[0][:100]
-            # source=mgeko searches mgeko.cc instead of the Asura catalogue (the default).
-            mg = qs.get("source", [""])[0] == "mgeko"
+            # source=mgeko/mangadex searches that source instead of the Asura catalogue (default).
+            source = qs.get("source", [""])[0]
             try:
-                hits = mgeko.search(q) if mg else [{**h, "source": "asura"} for h in ingest.catalog_search(q)]
+                if source == "mgeko":
+                    hits = mgeko.search(q)
+                elif source == "mangadex":
+                    hits = [{**h, "source": "mangadex"} for h in mangadex.search(q)]
+                else:
+                    hits = [{**h, "source": "asura"} for h in ingest.catalog_search(q)]
                 return self.send_json(hits)
             except Exception as e:
-                site = "mgeko" if mg else "the Asura catalogue"
+                site = {"mgeko": "mgeko", "mangadex": "MangaDex"}.get(source, "the Asura catalogue")
                 return self.send_json({"error": f"Could not search {site}: {e}"}, HTTPStatus.BAD_GATEWAY)
+        if path == "/api/providers":
+            return self.send_json(registry.diagnostics())
+        if path == "/api/search/federated":
+            qs = parse_qs(urlparse(self.path).query)
+            q = qs.get("q", [""])[0][:200]
+            wanted = qs.get("providers", [""])[0]
+            provider_names = [p.strip() for p in wanted.split(",") if p.strip()] or None
+            try:
+                return self.send_json(federated_search.search_all(q, provider_names))
+            except Exception as e:
+                return self.send_json({"error": f"federated search failed: {e}"}, HTTPStatus.BAD_GATEWAY)
+        if path == "/api/comics":
+            return self.send_json(db.list_comics())
+        if path.startswith(MANGADEX_IMAGE_PREFIX):
+            parts = unquote(path[len(MANGADEX_IMAGE_PREFIX):]).split("/")
+            if len(parts) != 3:
+                return self.send_json({"error": "not found"}, HTTPStatus.NOT_FOUND)
+            return self._send_mangadex_image(parts[0], parts[1], parts[2])
         if path == "/api/library":
             return self.send_library()
         if path == "/api/watchlist" or path.startswith("/api/watchlist/"):
@@ -756,6 +802,14 @@ class Handler(SimpleHTTPRequestHandler):
         parts = path.split("/")  # ['', 'api', 'ingest', <id>, <action>]
         if len(parts) == 7 and parts[:3] == ["", "api", "series"] and parts[4] == "chapters" and parts[6] == "add":
             return self.add_chapter(unquote(parts[3]), unquote(parts[5]))
+        if len(parts) == 5 and parts[:3] == ["", "api", "comics"] and parts[4] == "switch-source":
+            series = str(data.get("series", "")).strip()
+            if not series:
+                return self.send_json({"error": "series is required"}, HTTPStatus.BAD_REQUEST)
+            try:
+                return self.send_json(provider_switch.switch_source(unquote(parts[3]), series))
+            except provider_switch.SwitchError as e:
+                return self.send_json({"error": str(e)}, e.status)
         if len(parts) == 5 and parts[:3] == ["", "api", "ingest"] and parts[4] == "cancel":
             ok = INGEST.cancel(parts[3])
             return self.send_json({"ok": ok}, HTTPStatus.OK if ok else HTTPStatus.NOT_FOUND)
@@ -901,6 +955,7 @@ def main() -> None:
     args = ap.parse_args()
 
     db.init_schema()
+    db.backfill_comic_identities()
     if args.set_pin:
         pin = getpass.getpass("New PIN (6-8 digits): ")
         if not auth.valid_pin_format(pin) or pin != getpass.getpass("Repeat: "):

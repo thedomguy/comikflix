@@ -38,6 +38,7 @@ import db
 import db_ingest
 import download
 import imgsize
+import mangadex
 import mgeko
 import optimize_images
 import r2
@@ -62,10 +63,12 @@ CHAPTER_LINK_RE = re.compile(r'href="/comics/[^"/]+/chapter/([0-9]+(?:\.[0-9]+)?
 
 
 def parse_slug(value: str) -> str:
-    """Accept a bare slug or any asurascans.com/comics/<slug>[/...] URL (or an mgeko one)."""
+    """Accept a bare slug or any asurascans.com/comics/<slug>[/...] URL (or an mgeko/MangaDex one)."""
     value = value.strip()
     if mgeko.is_mgeko(value):
         return mgeko.parse_slug(value)
+    if mangadex.is_mangadex(value):
+        return mangadex.parse_slug(value)
     if "/" in value:
         parts = urlparse(value if "//" in value else "//" + value).path.strip("/").split("/")
         if "comics" in parts and parts.index("comics") + 1 < len(parts):
@@ -120,6 +123,8 @@ def fetch_series_info(slug: str) -> dict:
     on is the real one (info["slug"]), and info["moved_from"] names the old one."""
     if mgeko.is_mgeko(slug):
         return mgeko.fetch_series_info(slug)
+    if mangadex.is_mangadex(slug):
+        return mangadex.fetch_series_info(slug)
     page, final_url = asura.fetch_page(SERIES_URL.format(slug=slug))
     moved_from = None
     if "/comics/" in final_url:
@@ -203,8 +208,9 @@ def _upload_cover(client: r2.R2Client, slug: str, cover_url: str) -> tuple[str, 
 
 
 def _chapter_source_url(slug: str, chapter: str) -> str:
-    """Asura chapter URLs follow a pattern; mgeko ones are kept from its chapter list."""
-    if mgeko.is_mgeko(slug):
+    """Asura chapter URLs follow a pattern; mgeko/MangaDex ones are kept from their chapter list
+    (mgeko: the reader URL; MangaDex: the chapter UUID)."""
+    if mgeko.is_mgeko(slug) or mangadex.is_mangadex(slug):
         row = db.get_conn().execute(
             "SELECT source_url FROM chapters WHERE series_slug=? AND chapter_id=?", (slug, str(chapter))
         ).fetchone()
@@ -215,9 +221,13 @@ def _chapter_source_url(slug: str, chapter: str) -> str:
 
 
 def _extract_pages(slug: str, url: str, timeout: float = 30.0) -> list[dict]:
-    page = asura.fetch_html(url, timeout=timeout)
-    pages = mgeko.extract_pages(page) if mgeko.is_mgeko(slug) else asura.extract_pages(page)
-    # Sources that don't print page sizes (mgeko) get them read from the image headers.
+    if mangadex.is_mangadex(slug):
+        pages = mangadex.extract_pages(url)
+    else:
+        page = asura.fetch_html(url, timeout=timeout)
+        pages = mgeko.extract_pages(page) if mgeko.is_mgeko(slug) else asura.extract_pages(page)
+    # Sources that don't print page sizes (mgeko) get them read from the image headers; our own
+    # MangaDex proxy paths aren't fetchable this way, so those just stay without an aspect hint.
     imgsize.fill_aspects(pages)
     return pages
 

@@ -21,7 +21,7 @@ from typing import TYPE_CHECKING
 
 import db
 import ingest
-import mgeko
+import providers.registry as registry
 
 if TYPE_CHECKING:
     from ingest import IngestManager
@@ -44,7 +44,7 @@ _fail_counts: dict[str, int] = {}
 
 
 def provider_for(slug: str) -> str:
-    return "mgeko" if mgeko.is_mgeko(slug) else "asura"
+    return registry.for_slug(slug).name
 
 
 def _parse_iso(value: str | None) -> datetime | None:

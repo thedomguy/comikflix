@@ -5,6 +5,26 @@
 .ingest h2 { padding-right: 44px; }
 .ingest form .btn:disabled { opacity: .5; cursor: default; }
 
+/* Add-comic: "Paste a link" / "Search" tabs, and federated-search results */
+.ingest .tabs { display: flex; gap: 6px; margin-bottom: 14px; border-bottom: 1px solid #333; }
+.ingest .tabs button {
+  background: none; border: none; color: var(--muted); padding: 8px 4px; margin-right: 14px;
+  font-size: 14px; cursor: pointer; border-bottom: 2px solid transparent;
+}
+.ingest .tabs button.active { color: #fff; border-bottom-color: var(--accent); }
+.federated-cluster { margin-top: 16px; }
+.federated-cluster h3 { font-size: 15px; margin: 0 0 6px; }
+.federated-candidate {
+  display: flex; align-items: center; gap: 8px; padding: 8px 0; border-top: 1px solid #2a2a2a;
+}
+.federated-candidate .provider-badge {
+  font-size: 11px; text-transform: uppercase; letter-spacing: .03em; color: var(--muted);
+  border: 1px solid #3a3a3a; border-radius: 4px; padding: 2px 6px; flex: none;
+}
+.federated-candidate .candidate-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.federated-candidate .candidate-chapters { font-size: 12px; color: var(--muted); flex: none; }
+.federated-candidate .btn { padding: 6px 12px; font-size: 13px; margin: 0; flex: none; }
+
 .jobwin {
   color-scheme: dark; position: fixed; right: max(16px, var(--safe-right));
   bottom: max(16px, var(--safe-bottom)); z-index: 60; width: 360px;

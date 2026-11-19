@@ -29,6 +29,40 @@ export type LiveJob = IngestJob & {
   log: JobLogLine[];
 };
 
+// ---- federated search (across every enabled provider) ----
+
+export interface FederatedCandidate {
+  provider: string;
+  provider_id: string;
+  title: string;
+  url: string | null;
+  cover_url: string | null;
+  score: number;
+  can_read_pages: boolean;
+  chapter_count: number | null;
+  latest_chapter: string | null;
+  availability: "available" | "partial" | "unavailable" | "unknown";
+  coverage_error: string | null;
+}
+
+export interface FederatedCluster {
+  title: string;
+  alt_titles: string[];
+  candidates: FederatedCandidate[];
+}
+
+export interface FederatedSearchResult {
+  query: string;
+  providers_searched: string[];
+  provider_errors: Record<string, string>;
+  results: FederatedCluster[];
+}
+
+/** GET /api/search/federated: every enabled provider, clustered by title/alt-title match. */
+export async function searchFederated(query: string): Promise<FederatedSearchResult> {
+  return api<FederatedSearchResult>(`/api/search/federated?q=${encodeURIComponent(query)}`);
+}
+
 export async function startIngest(opts: {
   series: string;
   start_chapter: number | string;
