@@ -28,7 +28,7 @@ ITEM_RE = re.compile(
     r'(?:\s*<time[^>]*datetime="([^"]*)")?',
     re.S,
 )
-PAGE_IMG_RE = re.compile(r'<img\s+src="(https?://[^"]+)"[^>]*\bid="image-(\d+)"')
+PAGE_IMG_RE = re.compile(r'<img\b[^>]*?\bsrc="(https?://[^"]+)"[^>]*\bid="image-(\d+)"')
 MONTHS = {m: i for i, m in enumerate(
     ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"], 1)}
 
