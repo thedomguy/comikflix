@@ -130,6 +130,7 @@ function SearchForm({ onClose }: { onClose: () => void }) {
   const [err, setErr] = useState("");
   const [clusters, setClusters] = useState<FederatedCluster[] | null>(null);
   const [importing, setImporting] = useState<string | null>(null);
+  const [start, setStart] = useState("1");
 
   async function submit(e: FormEvent) {
     e.preventDefault();
@@ -150,10 +151,12 @@ function SearchForm({ onClose }: { onClose: () => void }) {
 
   async function importFrom(url: string | null, providerId: string) {
     const series = url || providerId;
+    const first = start.trim() ? parseInt(start, 10) : 1;
+    if (!Number.isFinite(first) || first < 1) return setErr("Start chapter must be a whole number ≥ 1.");
     setImporting(series);
     setErr("");
     try {
-      const job = await startIngest({ series, start_chapter: 1 });
+      const job = await startIngest({ series, start_chapter: first });
       watchJob(job.id, "import");
       onClose();
     } catch (e2) {
@@ -178,6 +181,19 @@ function SearchForm({ onClose }: { onClose: () => void }) {
             onChange={(e) => setQuery(e.target.value)}
           />
         </div>
+        <div>
+          <label htmlFor="ing-search-start">Start chapter</label>
+          <input
+            id="ing-search-start"
+            type="number"
+            inputMode="numeric"
+            min={1}
+            step={1}
+            placeholder="1"
+            value={start}
+            onChange={(e) => setStart(e.target.value)}
+          />
+        </div>
         <button className="btn play" type="submit" disabled={busy}>
           {busy ? "Searching…" : "Search"}
         </button>
@@ -193,7 +209,11 @@ function SearchForm({ onClose }: { onClose: () => void }) {
               <span className="provider-badge">{c.provider}</span>
               <span className="candidate-title">{c.title}</span>
               <span className="candidate-chapters">
-                {c.chapter_count != null ? `${c.chapter_count} ch.` : c.coverage_error ? "no chapters available" : "coverage unknown"}
+                {c.chapter_count != null
+                  ? `${c.chapter_count} ch.${c.latest_chapter ? ` · latest ${c.latest_chapter}` : ""}`
+                  : c.coverage_error
+                    ? "no chapters available"
+                    : "coverage unknown"}
               </span>
               <button
                 className="btn"
