@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { api } from "./api";
 import { thumb } from "./format";
 import { withBase } from "./paths";
@@ -15,8 +15,6 @@ interface LibraryState {
   /** Re-fetch /api/library (after an ingest, a release-date edit, ...). */
   refresh: () => Promise<void>;
   bySlug: (slug: string | undefined) => Series | undefined;
-  /** Bumped whenever progress is saved; read it in a component to re-render on progress. */
-  progressVersion: number;
 }
 
 const Ctx = createContext<LibraryState | null>(null);
@@ -52,7 +50,6 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
   const [all, setAll] = useState<Series[]>([]);
   const [ready, setReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [progressVersion, setProgressVersion] = useState(0);
   const ref = useRef<Series[]>([]);
 
   const refresh = useCallback(async () => {
@@ -73,9 +70,6 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     // Settings + progress must be ready before any page reads the store.
     Promise.all([store.bootstrap(), refresh()]).finally(() => setReady(true));
-    const onProgress = () => setProgressVersion((v) => v + 1);
-    window.addEventListener("comikflix:progress", onProgress);
-    return () => window.removeEventListener("comikflix:progress", onProgress);
   }, [refresh]);
 
   // Lookups by slug cover the vault too, so its series and reader pages open normally.
@@ -84,10 +78,17 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
   const vault = useMemo(() => all.filter((s) => s.private), [all]);
 
   const value = useMemo(
-    () => ({ library, vault, ready, error, refresh, bySlug, progressVersion }),
-    [library, vault, ready, error, refresh, bySlug, progressVersion],
+    () => ({ library, vault, ready, error, refresh, bySlug }),
+    [library, vault, ready, error, refresh, bySlug],
   );
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
+}
+
+/** Bumps whenever reading progress changes (saved here, or pulled from another device).
+ *  Read it in a component that shows progress so it re-renders on it. Kept apart from the
+ *  library context so a progress save re-renders only those components, not the whole app. */
+export function useProgressVersion(): number {
+  return useSyncExternalStore(store.subscribeProgress, () => store.progressVersion);
 }
 
 export function useLibrary() {

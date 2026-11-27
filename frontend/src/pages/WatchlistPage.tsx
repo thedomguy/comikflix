@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { bg, thumb } from "../lib/format";
-import { useLibrary } from "../lib/library";
+import { useLibrary, useProgressVersion } from "../lib/library";
 import { toast } from "../lib/toast";
 import type { WatchEntry, WatchStatus } from "../lib/types";
 import { STATUSES, STATUS_LABEL, entryById, seriesStatusOf, suggestFor, updateEntry, useWatchlist } from "../lib/watchlist";
@@ -22,7 +22,8 @@ const norm = (t: string) => t.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 /** #/list[?status=&sort=] and #/list/<id> (that entry's editor open), #/list/new (add). */
 export default function WatchlistPage({ id, query }: { id?: string; query: URLSearchParams }) {
   const { entries, ready, error } = useWatchlist();
-  const { bySlug, progressVersion } = useLibrary();
+  const { bySlug } = useLibrary();
+  const progressVersion = useProgressVersion();
   const [status, setStatus] = useState<WatchStatus>(() => (STATUSES as string[]).includes(query.get("status") || "") ? (query.get("status") as WatchStatus) : "reading");
   const [sort, setSort] = useState<Sort>(() => (SORTS.some((s) => s.key === query.get("sort")) ? (query.get("sort") as Sort) : "updated"));
   const [q, setQ] = useState("");

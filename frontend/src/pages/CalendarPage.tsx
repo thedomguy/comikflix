@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { dayKey } from "../lib/format";
-import { useLibrary } from "../lib/library";
+import { useLibrary, useProgressVersion } from "../lib/library";
 import { go } from "../lib/route";
 import { progressOf, releaseEvents, type ReleaseEvent } from "../lib/series";
 import { Agenda, DayList, dayAnchor } from "../components/calendar/Agenda";
@@ -38,7 +38,8 @@ function loadPrefs(): Prefs {
 
 /** #/calendar[/YYYY-MM]: released chapters, dates set by the user, and forecasts. */
 export default function CalendarPage({ month }: { month?: string }) {
-  const { library, progressVersion } = useLibrary();
+  const { library } = useLibrary();
+  const progressVersion = useProgressVersion();
   const { y, m0 } = parseMonth(month);
   const mk = monthKey(y, m0);
   const [prefs, setPrefs] = useState(loadPrefs);

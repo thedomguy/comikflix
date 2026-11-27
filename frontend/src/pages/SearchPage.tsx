@@ -3,7 +3,7 @@ import { api } from "../lib/api";
 import { bg } from "../lib/format";
 import { findChapter, parseChapterQuery, searchLibrary } from "../lib/filters";
 import { startIngest, watchJob } from "../lib/ingest";
-import { useLibrary } from "../lib/library";
+import { useLibrary, useProgressVersion } from "../lib/library";
 import { byReadingOrder, chapterCount, progressOf, resumeTarget, unreadCount } from "../lib/series";
 import { toast } from "../lib/toast";
 import type { CatalogHit, Series } from "../lib/types";
@@ -51,7 +51,8 @@ const siteLabel = (h: CatalogHit) => (h.source === "mgeko" ? "mgeko" : "Asura Sc
 
 /** #/search?q= — library, chapters and the Asura catalogue in one box ("/" from anywhere). */
 export default function SearchPage({ q: initial }: { q: string }) {
-  const { library, progressVersion } = useLibrary();
+  const { library } = useLibrary();
+  const progressVersion = useProgressVersion();
   const [q, setQ] = useState(initial);
   const [active, setActive] = useState(0);
   const [catalog, setCatalog] = useState<Catalog>({ state: "idle", for: "", hits: [], errors: [] });

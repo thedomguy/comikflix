@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { useLibrary } from "../lib/library";
+import { useLibrary, useProgressVersion } from "../lib/library";
 import { sortLibrary } from "../lib/filters";
 import { SeriesCard } from "../components/SeriesCard";
 import "../styles/library.css";
@@ -7,7 +7,8 @@ import "../styles/library.css";
 /** #/vault — series marked private, reached only from More → Private. They stay off Home,
  *  Library, Search and Calendar; no password for now. */
 export default function VaultPage() {
-  const { vault, progressVersion } = useLibrary();
+  const { vault } = useLibrary();
+  const progressVersion = useProgressVersion();
   const shown = useMemo(() => {
     void progressVersion;
     return sortLibrary(vault, "recent");

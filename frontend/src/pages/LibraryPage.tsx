@@ -12,7 +12,7 @@ import {
   type LibraryView,
   type SortKey,
 } from "../lib/filters";
-import { useLibrary } from "../lib/library";
+import { useLibrary, useProgressVersion } from "../lib/library";
 import { chapterCount, latestChapter, progressOf, unreadCount } from "../lib/series";
 import type { Series } from "../lib/types";
 import { CoverImg } from "../components/CoverImg";
@@ -23,7 +23,8 @@ import "../styles/library.css";
 /** #/library — every series with text filter, facets, sorting and grid/list views.
  *  The view lives in the hash query so it can be linked; edits use replaceState. */
 export default function LibraryPage({ query }: { query: URLSearchParams }) {
-  const { library, progressVersion } = useLibrary();
+  const { library } = useLibrary();
+  const progressVersion = useProgressVersion();
   const [v, setV] = useState<LibraryView>(() => parseLibraryQuery(query));
   const [drawer, setDrawer] = useState(false);
 

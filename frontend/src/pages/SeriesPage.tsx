@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { api } from "../lib/api";
 import { bg, fmtDate, fmtSize } from "../lib/format";
 import { startIngest, useIngestJobs, watchJob, type LiveJob } from "../lib/ingest";
-import { useLibrary } from "../lib/library";
+import { useLibrary, useProgressVersion } from "../lib/library";
 import { WEEKDAYS, chapterCount, dayTs, progressOf, resumeTarget, totalPages } from "../lib/series";
 import { store } from "../lib/store";
 import { toast } from "../lib/toast";
@@ -25,7 +25,8 @@ function nextReleaseLabel(nr: ReleaseForecast) {
 
 /** #/series/<slug>: a modal over the home page on desktop, a full page on mobile. */
 export default function SeriesPage({ slug, mode }: { slug: string; mode: "page" | "modal" }) {
-  const { bySlug, refresh, progressVersion } = useLibrary();
+  const { bySlug, refresh } = useLibrary();
+  const progressVersion = useProgressVersion();
   const s = bySlug(slug);
   const jobs = useIngestJobs();
   const close = () => (location.hash = "#/");

@@ -1,6 +1,6 @@
 import { useMemo, type ReactNode } from "react";
 import { bg, fmtSize } from "../lib/format";
-import { useLibrary } from "../lib/library";
+import { useLibrary, useProgressVersion } from "../lib/library";
 import { byReadingOrder, chapterCount, latestDate, newSinceRead, progressOf, releaseEvents, resumeTarget, totalPages, unreadCount, type ReleaseEvent } from "../lib/series";
 import { SeriesCard } from "../components/SeriesCard";
 import { WatchCard } from "../components/watchlist/WatchCard";
@@ -35,7 +35,8 @@ function whenLabel(d: Date) {
 
 /** #/ — hero (most recently read) and rows built for a growing library. */
 export default function HomePage() {
-  const { library, progressVersion } = useLibrary();
+  const { library } = useLibrary();
+  const progressVersion = useProgressVersion();
   const { entries } = useWatchlist();
 
   // Library-only rows: don't rebuild these (release forecast, sorts) on every progress save.

@@ -31,6 +31,19 @@ let bootPromise = null;
 // steady pace: at most one write per PROGRESS_EVERY_MS while reading, the rest coalesced
 // into it. Leaving the chapter, hiding the tab or closing it flushes right away, so the
 // spot is never older than this on another device.
+// Progress listeners (useProgressVersion): only components that show progress subscribe,
+// and only real changes notify them.
+const progressListeners = new Set();
+let progressVersion = 0;
+function emitProgress() {
+  progressVersion++;
+  progressListeners.forEach((f) => f());
+}
+function subscribeProgress(f) {
+  progressListeners.add(f);
+  return () => progressListeners.delete(f);
+}
+
 const pendingProgress = new Map();
 const lastSent = new Map(); // slug -> what the server has, to skip writes that change nothing
 let progressTimer = null;
@@ -165,8 +178,11 @@ async function flushProgress() {
       // The server merges in chapters read elsewhere; take them unless a newer write is queued.
       const cur = state.progress[slug];
       if (saved && Array.isArray(saved.read) && cur && !pendingProgress.has(slug)) {
-        cur.read = unionRead(cur.read, saved.read);
-        window.dispatchEvent(new Event("comikflix:progress"));
+        const read = unionRead(cur.read, saved.read);
+        if (read.length !== (cur.read || []).length) {
+          cur.read = read; // chapters read on another device
+          emitProgress();
+        }
       }
     })
   );
@@ -329,7 +345,7 @@ async function refreshProgress() {
     rememberSent(slug, state.progress[slug]);
     changed = true;
   }
-  if (changed) window.dispatchEvent(new Event("comikflix:progress"));
+  if (changed) emitProgress();
 }
 
 function flushAll() {
@@ -375,16 +391,23 @@ export const store = {
   progress(slug) {
     return state.progress[slug] || null;
   },
+  /** Subscribe to progress changes (returns unsubscribe); progressVersion bumps on each. */
+  subscribeProgress,
+  get progressVersion() {
+    return progressVersion;
+  },
   saveProgress(slug, chapter, frac, done) {
     const cur = state.progress[slug] || { read: [] };
     const read = new Set(cur.read || []);
     const finished = done && !read.has(chapter);
+    // Same spot as already held (a scroll that came back, a re-save on close): nothing to do.
+    if (cur.chapter === chapter && !finished && Math.abs((cur.frac || 0) - frac) < 0.001) return;
     if (done) read.add(chapter);
     const now = Date.now();
     state.progress[slug] = { chapter, frac, read: [...read], at: now, readAt: now };
     // Finishing a chapter goes out at once; scroll positions ride the steady pace.
     scheduleProgressWrite(slug, { now: finished });
-    window.dispatchEvent(new Event("comikflix:progress"));
+    emitProgress();
   },
   flush() {
     return flushProgress();
