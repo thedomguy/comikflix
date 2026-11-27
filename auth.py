@@ -128,7 +128,8 @@ def valid_api_token(header: str | None) -> bool:
     expected = os.environ.get("COMIKFLIX_API_TOKEN", "").strip()
     if not expected or not header or not header.startswith("Bearer "):
         return False
-    return hmac.compare_digest(header[7:].strip(), expected)
+    # bytes: compare_digest raises on non-ASCII str, and headers can carry any latin-1 text.
+    return hmac.compare_digest(header[7:].strip().encode("latin-1", "replace"), expected.encode())
 
 
 def _hash(token: str) -> str:

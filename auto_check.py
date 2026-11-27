@@ -12,6 +12,7 @@ are not hammered.
 from __future__ import annotations
 
 import random
+import re
 import sqlite3
 import threading
 import time
@@ -239,11 +240,10 @@ def _mark_provider_used(provider: str, *, hard_pause: float = 0) -> None:
 def _http_status(exc: BaseException) -> int | None:
     if isinstance(exc, urllib.error.HTTPError):
         return exc.code
-    text = str(exc)
-    for code in (429, 403, 503, 502):
-        if str(code) in text:
-            return code
-    return None
+    # Wrapped errors ("MangaDex HTTP 429: ..."): only a status next to "HTTP" counts, so a
+    # message like "captured 403 of 410 pages" doesn't trigger the long backoff.
+    m = re.search(r"\bHTTP(?: Error)? (\d{3})\b", str(exc))
+    return int(m.group(1)) if m else None
 
 
 def run_one(slug: str, mode: str, manager: IngestManager) -> dict:
@@ -260,12 +260,14 @@ def run_one(slug: str, mode: str, manager: IngestManager) -> dict:
         info = ingest.sync_series_metadata(slug)
         slug = info.get("slug") or slug
         result["title"] = info.get("title")
-        missing = ingest.chapters_needing_pages(info)
+        # Only chapters past the last one fetched are new: earlier gaps (a series imported from
+        # chapter N, a chapter that never captured) aren't, and an update job wouldn't reach them.
+        start = ingest.update_start_chapter(slug)
+        missing = [n for n in ingest.chapters_needing_pages(info) if float(n) >= start]
         result["missing"] = len(missing)
         had_new = bool(missing)
         started_job = None
         if mode == "ingest" and missing:
-            start = ingest.update_start_chapter(slug)
             try:
                 started_job = manager.start(
                     slug,

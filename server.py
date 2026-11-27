@@ -71,9 +71,10 @@ def _page_src(cdn_url: str | None) -> str | None:
 
 
 def _cover_urls(row) -> tuple[str | None, str | None]:
-    """Poster: remote http cover only; otherwise fall back to first page in scan_library."""
-    cover_url = row["cover_url"]
-    if cover_url and str(cover_url).startswith("http"):
+    """Poster: remote http cover or our MangaDex cover proxy; otherwise scan_library falls back
+    to the first page. Raw MangaDex cover URLs (stored before covers were proxied) are rewritten."""
+    cover_url = mangadex.proxied_cover(row["cover_url"])
+    if cover_url and str(cover_url).startswith(("http", mangadex.COVER_PREFIX)):
         return cover_url, None
     return None, None
 
@@ -192,7 +193,7 @@ def scan_library() -> list[dict]:
             "genres": genres,
             "status": row["status"],
             "status_manual": bool(row["status_manual"]),  # set by hand; refreshes keep it
-            "source": "mgeko" if mgeko.is_mgeko(slug) else "asura",
+            "source": db.provider_for_slug(slug),  # asura | mgeko | mangadex | custom
             "author": row["author"],
             "artist": row["artist"],
             "type": row["type"],
@@ -337,7 +338,7 @@ def get_chapter(slug: str, chapter_id: str) -> dict | None:
 
 def _read_json_body(handler: SimpleHTTPRequestHandler, max_bytes: int = 65536) -> tuple[dict | None, str | None]:
     try:
-        length = int(handler.headers.get("Content-Length") or 0)
+        length = max(0, int(handler.headers.get("Content-Length") or 0))  # read(-1) would block
         raw = handler.rfile.read(min(length, max_bytes)) or b"{}"
         return json.loads(raw), None
     except ValueError:
@@ -421,7 +422,8 @@ class Handler(SimpleHTTPRequestHandler):
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(data)))
-        self.send_header("Cache-Control", "public, max-age=31536000, immutable")
+        # private: these sit behind the login, so no shared cache (CDN, proxy) may keep them.
+        self.send_header("Cache-Control", "private, max-age=31536000, immutable")
         self.end_headers()
         self.wfile.write(data)
 
@@ -430,22 +432,35 @@ class Handler(SimpleHTTPRequestHandler):
         require images never be hotlinked directly from a third-party app's pages."""
         if not re.fullmatch(r"[0-9a-f-]{20,40}", chapter_id) or ".." in filename or "/" in filename:
             return self.send_error(HTTPStatus.BAD_REQUEST, "bad request")
+        self._send_fetched(lambda: mangadex.fetch_image(chapter_id, quality, filename), "MangaDex image")
+
+    def _send_mangadex_cover(self, manga_id: str, filename: str) -> None:
+        """Covers follow the same no-hotlinking rule as pages."""
+        self._send_fetched(lambda: mangadex.fetch_cover(manga_id, filename), "MangaDex cover", max_age=604800)
+
+    def _send_fetched(self, fetch, what: str, max_age: int = 86400) -> None:
         try:
-            data, ctype = mangadex.fetch_image(chapter_id, quality, filename)
+            data, ctype = fetch()
+        except ValueError:
+            return self.send_error(HTTPStatus.BAD_REQUEST, "bad request")
         except Exception as e:
-            return self.send_json({"error": f"MangaDex image unavailable: {e}"}, HTTPStatus.BAD_GATEWAY)
+            return self.send_json({"error": f"{what} unavailable: {e}"}, HTTPStatus.BAD_GATEWAY)
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(data)))
-        self.send_header("Cache-Control", "public, max-age=86400")
+        self.send_header("Cache-Control", f"private, max-age={max_age}")
         self.end_headers()
         self.wfile.write(data)
 
     # ---- auth ----
 
     def client_ip(self) -> str:
-        # Bound to 127.0.0.1 behind nginx, which passes the real client in X-Real-IP.
-        return self.headers.get("X-Real-IP") or self.client_address[0]
+        # Bound to 127.0.0.1 behind nginx, which passes the real client in X-Real-IP. Only a
+        # local proxy may set it: from anywhere else it would let one client pose as many.
+        peer = self.client_address[0]
+        if peer in ("127.0.0.1", "::1", "::ffff:127.0.0.1"):
+            return self.headers.get("X-Real-IP") or peer
+        return peer
 
     def session_token(self) -> str | None:
         jar = SimpleCookie()
@@ -650,6 +665,11 @@ class Handler(SimpleHTTPRequestHandler):
                 return self.send_json({"error": f"federated search failed: {e}"}, HTTPStatus.BAD_GATEWAY)
         if path == "/api/comics":
             return self.send_json(db.list_comics())
+        if path.startswith(mangadex.COVER_PREFIX):
+            parts = unquote(path[len(mangadex.COVER_PREFIX):]).split("/")
+            if len(parts) != 2:
+                return self.send_json({"error": "not found"}, HTTPStatus.NOT_FOUND)
+            return self._send_mangadex_cover(parts[0], parts[1])
         if path.startswith(MANGADEX_IMAGE_PREFIX):
             parts = unquote(path[len(MANGADEX_IMAGE_PREFIX):]).split("/")
             if len(parts) != 3:
@@ -719,14 +739,14 @@ class Handler(SimpleHTTPRequestHandler):
             return
         if path == "/api/settings":
             return self.send_json(db.put_settings(data))
+        # The API token means another program (Jarvis) is importing progress, not the user
+        # reading: it must not reorder "Continue Reading", and it may mark chapters unread.
+        reading = not auth.valid_api_token(self.headers.get("Authorization"))
         if path == "/api/progress":
-            return self.send_json(db.put_progress_all(data))
+            return self.send_json(db.put_progress_all(data, reading=reading))
         parts = path.split("/")
         if len(parts) == 4 and parts[:3] == ["", "api", "progress"]:
             slug = unquote(parts[3])
-            # The API token means another program (Jarvis) is importing progress, not the
-            # user reading: it must not reorder "Continue Reading".
-            reading = not auth.valid_api_token(self.headers.get("Authorization"))
             return self.send_json(db.put_progress_slug(slug, data, reading=reading))
         self.send_json({"error": "not found"}, HTTPStatus.NOT_FOUND)
 

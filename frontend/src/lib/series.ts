@@ -1,7 +1,7 @@
 // Shared per-series rules (continue target, unread counts, release forecast). Pages must use
 // these rather than re-deriving, so home, library, search and the calendar always agree.
 import { store } from "./store";
-import type { Chapter, Progress, Series } from "./types";
+import type { Chapter, Progress, Series, SeriesSource } from "./types";
 
 /** A chapter's publish time in ms (0: unknown). Uses the `ts` fixLibrary precomputed. */
 export const chapterTs = (c: Chapter | undefined): number =>
@@ -17,6 +17,16 @@ export const lastReadAt = (slug: string) => progressOf(slug)?.readAt || 0;
 export function byReadingOrder(a: Series, b: Series) {
   return lastReadAt(b.slug) - lastReadAt(a.slug) || a.title.localeCompare(b.title, undefined, { sensitivity: "base" });
 }
+
+const SITE_NAMES: Record<SeriesSource, string> = {
+  asura: "Asura Scans",
+  mgeko: "mgeko",
+  mangadex: "MangaDex",
+  custom: "Custom gallery",
+};
+
+/** The site a series' chapters come from, for display. */
+export const siteName = (s: Series) => SITE_NAMES[s.source ?? "asura"] ?? "Asura Scans";
 
 export function totalPages(s: Series) {
   return s.page_total ?? s.chapters.reduce((n, c) => n + (c.page_count || 0), 0);

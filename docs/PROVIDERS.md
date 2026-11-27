@@ -54,12 +54,16 @@ official API or ToS.
 - Public, documented REST API (`api.mangadex.org`), verified this session against its
   Acceptable Usage Policy: free for non-commercial, ad-free, crediting use — fits a personal
   single-user reader. Required: a real `User-Agent` (set in `mangadex.py`), no `Via` header,
-  ~5 req/s global and 40/min on `/at-home/server` (enforced by `mangadex._throttle`).
+  ~5 req/s global and 40/min on `/at-home/server` (enforced by `mangadex._throttle`, which hands
+  each caller its own send slot so concurrent callers are spread out). A chapter's page requests
+  share one `/at-home/server` lookup (`mangadex._at_home`), so a cold cache costs one call, not
+  one per page.
 - **Images are never hotlinked.** Every page URL ComikFlix stores/serves is our own
   `/api/mangadex/image/<chapterId>/<quality>/<filename>` path; `server.py`'s
   `_send_mangadex_image` resolves the real, short-lived MangaDex CDN URL server-side on each
-  request (cached 5 minutes per chapter) and streams the bytes. The browser's `<img>` tag only
-  ever talks to ComikFlix's own origin.
+  request (cached 5 minutes per chapter) and streams the bytes. Covers go the same way, through
+  `/api/mangadex/cover/<mangaId>/<filename>` (raw `uploads.mangadex.org` cover URLs stored earlier
+  are rewritten when served). The browser's `<img>` tag only ever talks to ComikFlix's own origin.
 - **Unsupported capability (explicit):** no MangaDex account is linked, so chapter
   "mark as read" is never reported back to MangaDex (`POST /chapter/{id}/read` needs their
   OAuth2 user auth, out of scope). ComikFlix's own `progress` table is unaffected — reading
@@ -142,8 +146,9 @@ from this repo) add new tools to Jarvis itself.
 - `GET /api/search/federated?q=<title>&providers=asura,mgeko,mangadex` — clustered results.
 - `GET /api/comics` — every canonical comic and its source mappings.
 - `POST /api/comics/<id>/switch-source` — body `{"series": "<slug or URL>"}`.
-- `GET /api/mangadex/image/<chapterId>/<quality>/<filename>` — the proxy (quality: `data` or
+- `GET /api/mangadex/image/<chapterId>/<quality>/<filename>` — the page proxy (quality: `data` or
   `data-saver`).
+- `GET /api/mangadex/cover/<mangaId>/<filename>` — the cover proxy.
 - `/api/catalog?source=mangadex&q=...` — alongside the existing `source=mgeko`.
 
 ## Database migration
@@ -183,11 +188,7 @@ They run via `db.init_schema()` (same lazy, idempotent pattern every existing mi
 `db.py` uses) plus a one-time `db.backfill_comic_identities()` call added to `server.main()`.
 **This SQL was shown to the user and confirmed before being applied to the live database.**
 
-## Testing note
+## Testing
 
-This machine's own rules (`~/.claude/CLAUDE.md`) forbid creating or running automated tests or
-test tooling on this VPS. In place of objective 9's "integration tests", this change was
-verified with `python -m py_compile` on every new/edited file, and the coverage-matrix numbers
-above were gathered by actually running the new search/chapter-lookup code against the live
-provider APIs (data-gathering, not a test suite — no test files were added). See the manual
-test checklist handed to the user for how to exercise this by hand.
+`python3 -m unittest discover tests` runs the unit tests (temp databases, no network). They're
+not run on the VPS; run them on a development machine.

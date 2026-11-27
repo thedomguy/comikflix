@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { withBase } from "../lib/paths";
 
 /** Poster/cover `<img>` with no-referrer (CDN hotlink protection) and optional fallback URL on error. */
 export function CoverImg({
@@ -16,7 +17,7 @@ export function CoverImg({
   return (
     <img
       className={className}
-      src={url}
+      src={withBase(url)}
       alt=""
       decoding="async"
       referrerPolicy="no-referrer"

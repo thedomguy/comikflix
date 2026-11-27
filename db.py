@@ -125,9 +125,13 @@ def close_thread_conn() -> None:
 
 
 @contextmanager
-def transaction() -> Iterator[sqlite3.Connection]:
+def transaction(*, immediate: bool = False) -> Iterator[sqlite3.Connection]:
+    """immediate=True takes the write lock up front, so reads inside the block can't go stale
+    before the write (sqlite3 otherwise only opens the transaction at the first write)."""
     conn = get_conn()
     try:
+        if immediate:
+            conn.execute("BEGIN IMMEDIATE")
         yield conn
         conn.commit()
     except Exception:
@@ -488,23 +492,30 @@ def put_progress_slug(slug: str, data: dict, *, reading: bool = True) -> dict:
             updated = _now()
     else:
         updated = _now()
-    with transaction() as conn:
+    read_at = updated if reading else None
+    with transaction(immediate=True) as conn:
         if reading:
             # The app only ever adds to the read list, so a tab holding an old copy must not
             # shrink it. Imports (Jarvis) replace it: that is how chapters get marked unread.
-            row = conn.execute("SELECT read_json FROM progress WHERE series_slug = ?", (slug,)).fetchone()
+            row = conn.execute(
+                "SELECT chapter, frac, read_json, updated_at FROM progress WHERE series_slug = ?", (slug,)
+            ).fetchone()
             if row:
                 have = [str(c) for c in read]
                 seen = set(have)
                 read = have + [c for c in _loads(row["read_json"], []) if str(c) not in seen]
+                # A write older than what's stored (a phone flushing an offline session, a tab
+                # left open) keeps the newer position; only its read chapters are merged in.
+                if _older(updated, row["updated_at"]):
+                    chapter, frac, updated = row["chapter"], row["frac"], row["updated_at"]
         conn.execute(
             "INSERT INTO progress(series_slug, chapter, frac, read_json, updated_at, read_at) "
             "VALUES(?, ?, ?, ?, ?, ?) "
             "ON CONFLICT(series_slug) DO UPDATE SET "
             "chapter = excluded.chapter, frac = excluded.frac, "
             "read_json = excluded.read_json, updated_at = excluded.updated_at, "
-            "read_at = COALESCE(excluded.read_at, progress.read_at)",
-            (slug, None if chapter is None else str(chapter), frac, _dumps(read), updated, updated if reading else None),
+            "read_at = COALESCE(MAX(excluded.read_at, progress.read_at), excluded.read_at, progress.read_at)",
+            (slug, None if chapter is None else str(chapter), frac, _dumps(read), updated, read_at),
         )
     return get_progress().get(slug) or {
         "chapter": chapter,
@@ -514,14 +525,22 @@ def put_progress_slug(slug: str, data: dict, *, reading: bool = True) -> dict:
     }
 
 
-def put_progress_all(data: dict) -> dict[str, dict]:
-    """Replace/merge a full slug→entry map (PUT /api/progress)."""
+def _older(a: str | None, b: str | None) -> bool:
+    """True when ISO timestamp `a` is strictly before `b` (unparseable counts as not older)."""
+    try:
+        return datetime.fromisoformat(a) < datetime.fromisoformat(b)
+    except (TypeError, ValueError):
+        return False
+
+
+def put_progress_all(data: dict, *, reading: bool = True) -> dict[str, dict]:
+    """Replace/merge a full slug→entry map (PUT /api/progress). reading as in put_progress_slug."""
     src = data.get("progress") if isinstance(data.get("progress"), dict) else data
     if not isinstance(src, dict):
         return get_progress()
     for slug, entry in src.items():
         if isinstance(entry, dict):
-            put_progress_slug(str(slug), entry)
+            put_progress_slug(str(slug), entry, reading=reading)
     return get_progress()
 
 
@@ -594,7 +613,9 @@ def upsert_series(row: dict) -> None:
 # ---- canonical comic identity (additive; series/chapters/pages/progress/watchlist still key
 # off series.slug as before) ----
 
-_SOURCE_PREFIXES = (("mgeko-", "mgeko"), ("mangadex-", "mangadex"), ("comick-", "comick"))
+_SOURCE_PREFIXES = (
+    ("mgeko-", "mgeko"), ("mangadex-", "mangadex"), ("comick-", "comick"), ("custom-", "custom"),
+)
 
 
 def provider_for_slug(slug: str) -> str:
@@ -645,9 +666,14 @@ def _ensure_comic(conn: sqlite3.Connection, slug: str, title: str) -> str:
 
 
 def backfill_comic_identities() -> int:
-    """One-time (idempotent, safe to call every startup) pass: every series without a comic
-    yet gets one. Returns how many were created."""
+    """Idempotent startup pass: every series without a comic yet gets one, and comics none of
+    whose sources is in the library any more (left behind by slug moves before move_series
+    carried identities along) are dropped. Returns how many were created."""
     with transaction() as conn:
+        conn.execute(
+            "DELETE FROM comics WHERE id NOT IN (SELECT s.comic_id FROM comic_sources s "
+            "JOIN series ON series.slug = s.series_slug)"
+        )
         slugs = [r["slug"] for r in conn.execute(
             "SELECT slug FROM series WHERE slug NOT IN (SELECT series_slug FROM comic_sources WHERE series_slug IS NOT NULL)"
         ).fetchall()]
@@ -943,11 +969,41 @@ def move_series(old: str, new: str) -> None:
             }
             conn.execute("UPDATE settings SET value_json = ? WHERE key = 'autoScroll'", (_dumps(a),))
 
+        _move_comic_identity(conn, old, new)
+
         import watchlist  # imports db; deferred to avoid the cycle
 
         watchlist.move(conn, old, new)
         conn.execute("DELETE FROM series WHERE slug = ?", (old,))  # cascades to its chapters/pages
     bump()
+
+
+def _move_comic_identity(conn: sqlite3.Connection, old: str, new: str) -> None:
+    """A slug move within one provider (Asura changed a series' id suffix): the comic's source
+    row follows the series instead of a second comic being made for `new`. Moves across
+    providers (switch_source) keep the old source row as an inactive mapping; switch_source
+    sets the flags itself."""
+    if provider_for_slug(old) != provider_for_slug(new):
+        return
+    src = conn.execute("SELECT id, comic_id FROM comic_sources WHERE series_slug = ?", (old,)).fetchone()
+    if not src:
+        return
+    now = _now()
+    dup = conn.execute("SELECT id, comic_id FROM comic_sources WHERE series_slug = ?", (new,)).fetchone()
+    if dup:
+        # `new` already had its own comic: fold it into the one with the history.
+        conn.execute("UPDATE comic_sources SET comic_id = ? WHERE comic_id = ? AND id != ?",
+                     (src["comic_id"], dup["comic_id"], dup["id"]))
+        conn.execute("DELETE FROM comic_sources WHERE id = ?", (dup["id"],))
+        if dup["comic_id"] != src["comic_id"]:
+            conn.execute("DELETE FROM comics WHERE id = ?", (dup["comic_id"],))
+    provider = provider_for_slug(new)
+    conn.execute(
+        "UPDATE comic_sources SET series_slug = ?, provider_series_id = ?, updated_at = ? WHERE id = ?",
+        (new, new[len(provider) + 1:] if provider != "asura" else new, now, src["id"]),
+    )
+    conn.execute("UPDATE comics SET primary_slug = ?, updated_at = ? WHERE id = ? AND primary_slug = ?",
+                 (new, now, src["comic_id"], old))
 
 
 def list_chapters(series_slug: str) -> list[sqlite3.Row]:

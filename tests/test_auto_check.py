@@ -185,6 +185,24 @@ class Modes(AutoCheckBase):
         self.assertEqual(kwargs.kwargs.get("source") or kwargs[1].get("source"), "auto")
         self.assertEqual(result["job_id"], "abc123")
 
+    def test_gaps_before_last_fetched_chapter_are_not_new(self):
+        # Imported from chapter 3: chapters 1-2 were never fetched, and an update starts at 3.
+        seed_series("from-three", auto_check="ingest", published_days_ago=7)
+        manager = ingest.IngestManager()
+        info = self._info("from-three", ("1", "2", "3"))
+        with mock.patch.object(ingest, "sync_series_metadata", return_value=info), \
+             mock.patch.object(ingest, "chapters_needing_pages", return_value=["1", "2"]), \
+             mock.patch.object(ingest, "update_start_chapter", return_value=3.0), \
+             mock.patch.object(manager, "start") as start:
+            result = ac.run_one("from-three", "ingest", manager)
+        start.assert_not_called()
+        self.assertEqual(result["missing"], 0)
+
+    def test_status_codes_only_read_next_to_http(self):
+        self.assertEqual(ac._http_status(RuntimeError("MangaDex HTTP 429: slow down")), 429)
+        self.assertEqual(ac._http_status(RuntimeError("HTTP Error 403: Forbidden")), 403)
+        self.assertIsNone(ac._http_status(RuntimeError("captured 403 of 410 pages listed by Asura")))
+
 
 class Budget(AutoCheckBase):
     def test_provider_gap_blocks_second_check(self):

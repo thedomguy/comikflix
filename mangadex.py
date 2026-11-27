@@ -8,13 +8,14 @@ MangaDex's Acceptable Usage Policy (api.mangadex.org/docs, verified 2026-11-20) 
   - page images are NEVER hotlinked to end users: callers must proxy them
 This module never exposes a raw mangadex.org/uploads.mangadex.org URL to the reader; page
 `src` values are always our own `/api/mangadex/image/<chapterId>/<quality>/<filename>` proxy
-path (see server.py's `_send_mangadex_image`, which resolves the real, short-lived at-home
+path and covers `/api/mangadex/cover/<mangaId>/<filename>` (see server.py's `_send_mangadex_image`, which resolves the real, short-lived at-home
 URL per request). No account is linked, so chapter "mark as read" is not reported back to
 MangaDex (it needs OAuth2 user auth) — our own `progress` table is the only read-tracking.
 """
 from __future__ import annotations
 
 import json
+import re
 import threading
 import time
 import urllib.error
@@ -27,6 +28,8 @@ from urllib.parse import urlparse
 API = "https://api.mangadex.org"
 UPLOADS = "https://uploads.mangadex.org"
 PREFIX = "mangadex-"
+COVER_PREFIX = "/api/mangadex/cover/"
+COVER_FILE_RE = re.compile(r"[A-Za-z0-9._-]{1,120}")
 USER_AGENT = "ComikFlix/1.0 (personal single-user reader; +https://github.com/)"
 FEED_LANGS = ("en",)
 FEED_PAGE_SIZE = 200
@@ -44,17 +47,17 @@ _at_home_recent: list[float] = []
 
 
 def _throttle(bucket: list[float], max_per_window: int, window: float) -> None:
+    """Sliding-window limit. `bucket` holds the send times already handed out (some in the
+    future); each caller reserves the first slot at least `window` after the max_per_window-th
+    most recent one, so callers waiting at the same time get spread out, not released together."""
     with _lock:
         now = time.monotonic()
-        while bucket and now - bucket[0] > window:
+        while bucket and now - bucket[0] >= window:
             bucket.pop(0)
-        if len(bucket) >= max_per_window:
-            wait = window - (now - bucket[0])
-        else:
-            wait = 0.0
-        bucket.append(now + max(wait, 0.0))
-    if wait > 0:
-        time.sleep(wait)
+        slot = now if len(bucket) < max_per_window else max(now, bucket[-max_per_window] + window)
+        bucket.append(slot)
+    if slot > now:
+        time.sleep(slot - now)
 
 
 def _get(path: str, params: dict | None = None, *, timeout: float = 20.0) -> dict:
@@ -152,7 +155,7 @@ def search(query: str, limit: int = 8) -> list[dict]:
             "title": title or "(untitled)",
             "alt_titles": alts,
             "url": f"https://mangadex.org/title/{m['id']}",
-            "cover_url": f"{UPLOADS}/covers/{m['id']}/{cover_file}" if cover_file else None,
+            "cover_url": cover_path(m["id"], cover_file),
             "score": round(0.6 * overlap + 0.4 * ratio, 3),
         })
     return sorted(out, key=lambda r: -r["score"])[:limit]
@@ -238,7 +241,7 @@ def fetch_series_info(slug: str) -> dict:
         "title": title,
         "description": _localized(attrs.get("description")),
         "alt_titles": alts,
-        "cover_url": f"{UPLOADS}/covers/{manga_id}/{cover_file}" if cover_file else None,
+        "cover_url": cover_path(manga_id, cover_file),
         "rating": None,
         "bookmarks": None,
         "status": STATUS_MAP.get((attrs.get("status") or "").lower()),
@@ -258,6 +261,7 @@ def fetch_series_info(slug: str) -> dict:
 
 _at_home_cache: dict[str, tuple[float, str, str]] = {}  # chapter_id -> (fetched_at, base_url, hash)
 _at_home_lock = threading.Lock()
+_at_home_inflight: dict[str, threading.Lock] = {}  # one lookup per chapter; the rest wait for it
 
 
 def _fetch_at_home(chapter_id: str) -> dict:
@@ -271,18 +275,29 @@ def _fetch_at_home(chapter_id: str) -> dict:
 def _at_home(chapter_id: str) -> tuple[str, str]:
     """(baseUrl, hash) for a chapter, cached briefly; re-fetched as needed per MangaDex's
     own guidance (the token can expire or be invalidated by a reported failed delivery)."""
+    def cached() -> tuple[str, str] | None:
+        with _at_home_lock:
+            hit = _at_home_cache.get(chapter_id)
+            return hit[1:] if hit and time.time() - hit[0] < AT_HOME_TTL else None
+
+    if hit := cached():
+        return hit
+    # The reader asks for a chapter's pages all at once: without this, a cold cache sends one
+    # /at-home/server request per page and burns the 40/min budget on a single chapter.
     with _at_home_lock:
-        cached = _at_home_cache.get(chapter_id)
-        if cached and time.time() - cached[0] < AT_HOME_TTL:
-            return cached[1], cached[2]
-    data = _fetch_at_home(chapter_id)
-    chapter = data.get("chapter") or {}
-    base_url, chash = data.get("baseUrl"), chapter.get("hash")
-    if not base_url or not chash:
-        raise RuntimeError("MangaDex did not return an at-home server for this chapter")
-    with _at_home_lock:
-        _at_home_cache[chapter_id] = (time.time(), base_url, chash)
-    return base_url, chash
+        lookup = _at_home_inflight.setdefault(chapter_id, threading.Lock())
+    with lookup:
+        if hit := cached():
+            return hit
+        data = _fetch_at_home(chapter_id)
+        chapter = data.get("chapter") or {}
+        base_url, chash = data.get("baseUrl"), chapter.get("hash")
+        if not base_url or not chash:
+            raise RuntimeError("MangaDex did not return an at-home server for this chapter")
+        with _at_home_lock:
+            _at_home_cache[chapter_id] = (time.time(), base_url, chash)
+            _at_home_inflight.pop(chapter_id, None)
+        return base_url, chash
 
 
 def extract_pages(chapter_id: str) -> list[dict]:
@@ -326,3 +341,29 @@ def fetch_image(chapter_id: str, quality: str, filename: str, timeout: float = 2
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         ctype = resp.headers.get_content_type() or "image/jpeg"
         return resp.read(), ctype
+
+
+# ---- covers: proxied too (the same no-hotlinking rule as pages) ----------------------------
+
+
+def cover_path(manga_id: str, filename: str | None) -> str | None:
+    """Our proxy path for a cover file, or None without one."""
+    return f"{COVER_PREFIX}{manga_id}/{filename}" if filename else None
+
+
+def proxied_cover(url: str | None) -> str | None:
+    """Rewrite a raw uploads.mangadex.org cover URL (stored before covers were proxied) to our
+    proxy path; anything else is returned unchanged."""
+    prefix = f"{UPLOADS}/covers/"
+    if url and url.startswith(prefix):
+        manga_id, _, filename = url[len(prefix):].partition("/")
+        return cover_path(manga_id, filename) or url
+    return url
+
+
+def fetch_cover(manga_id: str, filename: str, timeout: float = 20.0) -> tuple[bytes, str]:
+    if not _looks_like_uuid(manga_id) or not COVER_FILE_RE.fullmatch(filename) or ".." in filename:
+        raise ValueError("bad cover path")
+    req = urllib.request.Request(f"{UPLOADS}/covers/{manga_id}/{filename}", headers={"User-Agent": USER_AGENT})
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return resp.read(), resp.headers.get_content_type() or "image/jpeg"

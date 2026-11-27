@@ -74,6 +74,8 @@ def add_gallery(
         },
         cover_url=pages_meta[0]["src"] if pages_meta else None,
     )
+    # Straight away: until then the series is public and auto-check would treat it as an Asura one.
+    db.patch_series(slug, {"private": private, "auto_check": "off"})
 
     pages = [
         {
@@ -93,7 +95,6 @@ def add_gallery(
         published_at=datetime.now(timezone.utc).isoformat(),
         pages=pages,
     )
-    db.patch_series(slug, {"private": private, "auto_check": "off"})
     return slug
 
 

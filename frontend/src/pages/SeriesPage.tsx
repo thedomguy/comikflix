@@ -3,7 +3,7 @@ import { api } from "../lib/api";
 import { bg, fmtDate, fmtSize } from "../lib/format";
 import { startIngest, useIngestJobs, watchJob, type LiveJob } from "../lib/ingest";
 import { useLibrary, useProgressVersion } from "../lib/library";
-import { WEEKDAYS, chapterCount, dayTs, progressOf, resumeTarget, totalPages } from "../lib/series";
+import { WEEKDAYS, chapterCount, dayTs, progressOf, resumeTarget, siteName, totalPages } from "../lib/series";
 import { store } from "../lib/store";
 import { toast } from "../lib/toast";
 import type { ReleaseForecast, Series } from "../lib/types";
@@ -170,7 +170,7 @@ function Sheet({
               <div>
                 Source:{" "}
                 <a href={s.source_url} target="_blank" rel="noreferrer">
-                  {s.source === "mgeko" ? "mgeko" : "Asura Scans"}
+                  {siteName(s)}
                 </a>
               </div>
             )}

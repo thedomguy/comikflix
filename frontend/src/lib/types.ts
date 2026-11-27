@@ -25,6 +25,8 @@ export interface ReleaseForecast {
   next_expected: string; // YYYY-MM-DD (server's local day)
 }
 
+export type SeriesSource = "asura" | "mgeko" | "mangadex" | "custom";
+
 export interface Series {
   slug: string;
   title: string;
@@ -32,7 +34,7 @@ export interface Series {
   genres: string[];
   status: string | null; // ongoing | completed | hiatus | ...
   status_manual?: boolean; // set by hand (app/Jarvis): source refreshes keep it
-  source?: "asura" | "mgeko"; // where chapters are read from
+  source?: SeriesSource; // where chapters are read from
   author: string | null;
   artist: string | null;
   type: string | null; // manhwa | manga | manhua
