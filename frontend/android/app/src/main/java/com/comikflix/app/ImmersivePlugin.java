@@ -18,12 +18,12 @@ public class ImmersivePlugin extends Plugin {
         Activity activity = getActivity();
         activity.runOnUiThread(() -> {
             Window window = activity.getWindow();
-            WindowCompat.setDecorFitsSystemWindow(window, false);
+            WindowCompat.setDecorFitsSystemWindows(window, false);
             WindowInsetsControllerCompat controller =
                 new WindowInsetsControllerCompat(window, window.getDecorView());
             controller.hide(WindowInsetsCompat.Type.systemBars());
             controller.setSystemBarsBehavior(
-                WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BY_SWIPE);
+                WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
         });
         call.resolve();
     }
@@ -36,7 +36,7 @@ public class ImmersivePlugin extends Plugin {
             WindowInsetsControllerCompat controller =
                 new WindowInsetsControllerCompat(window, window.getDecorView());
             controller.show(WindowInsetsCompat.Type.systemBars());
-            WindowCompat.setDecorFitsSystemWindow(window, true);
+            WindowCompat.setDecorFitsSystemWindows(window, true);
         });
         call.resolve();
     }
