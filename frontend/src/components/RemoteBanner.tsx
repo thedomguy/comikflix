@@ -3,7 +3,7 @@ import { withBase } from "../lib/paths";
 import { setRemoteTarget, useRemoteTarget } from "../lib/remoteTarget";
 import "../styles/remote.css";
 
-const STALE_S = 60; // screens heartbeat every 20s
+const STALE_S = 60; // the server refreshes a live screen every 15s (stream pings)
 const POLL_MS = 5000;
 
 interface ScreenInfo {

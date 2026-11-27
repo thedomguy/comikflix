@@ -566,12 +566,13 @@ class Handler(SimpleHTTPRequestHandler):
         screen, conn = remote.connect_screen(sid, name)
         try:
             self.sse_start()
-            self.sse_send("hello", {"id": sid})
+            self.sse_send("hello", {"id": sid, "watchers": remote.watcher_count(sid)})
             while screen.conn is conn:
                 try:
                     cmd = screen.commands.get(timeout=remote.HEARTBEAT)
                 except queue.Empty:
                     self.sse_ping()
+                    remote.touch(screen)  # the live stream is the heartbeat
                     continue
                 if screen.conn is not conn:  # superseded by a reconnect: hand it over
                     remote.send_command(sid, cmd)

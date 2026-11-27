@@ -27,9 +27,20 @@ let state = defaults();
 let booted = false;
 let bootPromise = null;
 
+// Progress is kept in memory on every scroll pause, but only written to the server at a
+// steady pace: at most one write per PROGRESS_EVERY_MS while reading, the rest coalesced
+// into it. Leaving the chapter, hiding the tab or closing it flushes right away, so the
+// spot is never older than this on another device.
 const pendingProgress = new Map();
+const lastSent = new Map(); // slug -> what the server has, to skip writes that change nothing
 let progressTimer = null;
-const PROGRESS_DEBOUNCE_MS = 400;
+let lastProgressWrite = 0;
+const PROGRESS_EVERY_MS = 15000;
+const PROGRESS_SETTLE_MS = 1500; // first write after a quiet spell waits for scrolling to pause
+const REFRESH_EVERY_MS = 30000; // pulling progress on focus/visible: at most this often
+let lastRefresh = 0;
+let settingsTimer = null;
+const SETTINGS_DEBOUNCE_MS = 600; // sliders fire on every step
 
 async function fetchJson(url) {
   try {
@@ -47,6 +58,7 @@ async function putJson(url, body) {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
+      keepalive: true, // still delivered when the write is the tab closing
     });
     if (!res.ok) return false;
     return (await res.json().catch(() => null)) || true;
@@ -94,8 +106,22 @@ function settingsPayload() {
 }
 
 function putSettings() {
+  clearTimeout(settingsTimer);
+  settingsTimer = null;
   return putJson(withBase("/api/settings"), settingsPayload());
 }
+
+/** Settings changed from a slider or picker: one write once it stops moving. */
+function scheduleSettings() {
+  clearTimeout(settingsTimer);
+  settingsTimer = setTimeout(putSettings, SETTINGS_DEBOUNCE_MS);
+}
+
+const sameAsSent = (slug, d) => {
+  const s = lastSent.get(slug);
+  return !!s && s.chapter === d.chapter && Math.abs((s.frac || 0) - (d.frac || 0)) < 0.002 && s.readKey === (d.read || []).join(",");
+};
+const rememberSent = (slug, d) => lastSent.set(slug, { chapter: d.chapter, frac: d.frac, readKey: (d.read || []).join(",") });
 
 function putProgressSlug(slug, data) {
   return putJson(withBase(`/api/progress/${encodeURIComponent(slug)}`), {
@@ -106,22 +132,36 @@ function putProgressSlug(slug, data) {
   });
 }
 
-function scheduleProgressWrite(slug) {
+function scheduleProgressWrite(slug, { now = false } = {}) {
   const data = state.progress[slug];
   if (!data) return;
+  if (sameAsSent(slug, data)) {
+    pendingProgress.delete(slug);
+    return;
+  }
   pendingProgress.set(slug, data);
-  clearTimeout(progressTimer);
-  progressTimer = setTimeout(flushProgress, PROGRESS_DEBOUNCE_MS);
+  if (now) return void flushProgress();
+  if (progressTimer) return; // a write is already due; it will carry this one
+  const wait = Math.max(PROGRESS_SETTLE_MS, lastProgressWrite + PROGRESS_EVERY_MS - Date.now());
+  progressTimer = setTimeout(flushProgress, wait);
 }
 
 async function flushProgress() {
   clearTimeout(progressTimer);
   progressTimer = null;
-  const entries = [...pendingProgress.entries()];
+  const entries = [...pendingProgress.entries()].filter(([slug, data]) => !sameAsSent(slug, data));
   pendingProgress.clear();
+  if (!entries.length) return;
+  lastProgressWrite = Date.now();
   await Promise.all(
     entries.map(async ([slug, data]) => {
+      rememberSent(slug, data);
       const saved = await putProgressSlug(slug, data);
+      if (!saved) {
+        lastSent.delete(slug); // didn't land: let the next save retry it
+        if (!pendingProgress.has(slug)) scheduleProgressWrite(slug);
+        return;
+      }
       // The server merges in chapters read elsewhere; take them unless a newer write is queued.
       const cur = state.progress[slug];
       if (saved && Array.isArray(saved.read) && cur && !pendingProgress.has(slug)) {
@@ -238,6 +278,8 @@ async function doBootstrap() {
   state = defaults();
   applySettings(apiSettings);
   applyProgressMap(apiProgress);
+  for (const [slug, d] of Object.entries(state.progress)) rememberSent(slug, d);
+  lastRefresh = Date.now();
 
   if (local) {
     // One-time migrate: browser cache wins, then push to API and clear localStorage.
@@ -262,6 +304,7 @@ async function doBootstrap() {
  *  timestamp wins; series with an unsent local write are left alone. */
 async function refreshProgress() {
   if (!booted) return;
+  lastRefresh = Date.now();
   const map = await fetchJson(withBase("/api/progress"));
   if (!map || typeof map !== "object") return;
   let changed = false;
@@ -283,22 +326,33 @@ async function refreshProgress() {
       at: e.at || Date.now(),
       readAt: e.read_at ?? null,
     };
+    rememberSent(slug, state.progress[slug]);
     changed = true;
   }
   if (changed) window.dispatchEvent(new Event("comikflix:progress"));
 }
 
+function flushAll() {
+  flushProgress();
+  if (settingsTimer) putSettings();
+}
+
 function ensureFlushHooks() {
   if (ensureFlushHooks.done) return;
   ensureFlushHooks.done = true;
-  window.addEventListener("pagehide", () => {
-    flushProgress();
-  });
+  window.addEventListener("pagehide", flushAll);
+  // Coming back to the app (tab shown, window focused) pulls progress from other devices,
+  // but not more than every REFRESH_EVERY_MS: on a laptop, focus fires on every click back
+  // into the window (devtools, another app), and visible + focus often fire together.
+  const pull = () => {
+    if (Date.now() - lastRefresh < REFRESH_EVERY_MS) return;
+    refreshProgress();
+  };
   document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "hidden") flushProgress();
-    else refreshProgress();
+    if (document.visibilityState === "hidden") flushAll();
+    else pull();
   });
-  window.addEventListener("focus", () => refreshProgress());
+  window.addEventListener("focus", pull);
 }
 
 export const store = {
@@ -324,10 +378,12 @@ export const store = {
   saveProgress(slug, chapter, frac, done) {
     const cur = state.progress[slug] || { read: [] };
     const read = new Set(cur.read || []);
+    const finished = done && !read.has(chapter);
     if (done) read.add(chapter);
     const now = Date.now();
     state.progress[slug] = { chapter, frac, read: [...read], at: now, readAt: now };
-    scheduleProgressWrite(slug);
+    // Finishing a chapter goes out at once; scroll positions ride the steady pace.
+    scheduleProgressWrite(slug, { now: finished });
     window.dispatchEvent(new Event("comikflix:progress"));
   },
   flush() {
@@ -338,7 +394,7 @@ export const store = {
   },
   setReaderWidth(n) {
     state.readerWidth = Math.min(1400, Math.max(400, +n || 800));
-    putSettings();
+    scheduleSettings();
     return state.readerWidth;
   },
   get sortNewest() {
@@ -384,7 +440,7 @@ export const store = {
       }
     }
     state.autoScroll = a;
-    putSettings();
+    scheduleSettings();
     return a;
   },
 };

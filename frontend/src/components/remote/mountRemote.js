@@ -11,7 +11,7 @@ import { newPeer, gathered, signal } from "../../lib/rtc";
 import { getRemoteTarget, setRemoteTarget } from "../../lib/remoteTarget";
 import { byReadingOrder, resumeTarget } from "../../lib/series";
 
-const STALE_S = 60; // screens heartbeat every 20s
+const STALE_S = 60; // the server refreshes a live screen every 15s (stream pings)
 const PAD_GAIN = 2.2; // one full drag of the pad scrolls ~2 screens
 const SPEED_MIN = 10;
 const SPEED_MAX = 1000;

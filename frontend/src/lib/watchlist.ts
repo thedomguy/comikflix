@@ -52,8 +52,12 @@ export function startWatchlist() {
   if (started) return;
   started = true;
   void loadWatchlist();
+  let last = Date.now();
   document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "visible") void loadWatchlist();
+    // Quick tab flips don't need a refetch; changes from elsewhere show within 30s.
+    if (document.visibilityState !== "visible" || Date.now() - last < 30000) return;
+    last = Date.now();
+    void loadWatchlist();
   });
 }
 

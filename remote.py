@@ -2,7 +2,9 @@
 
 A screen holds an SSE stream open and receives commands; it posts its state (what it
 is showing, scroll position, ...) which is fanned out to any remotes watching it.
-Nothing is persisted: a screen exists exactly while its stream is connected.
+Nothing is persisted: a screen exists exactly while its stream is connected, and the
+stream's own pings keep it fresh (no client heartbeat). Screens are told how many remotes
+watch them ("watchers" command) so they only stream live state when someone is looking.
 
 The relay also carries WebRTC signaling so a remote and its screen can open a direct
 data channel (same Wi-Fi: phone -> laptop without the round trip through this server);
@@ -98,12 +100,31 @@ def signal_remotes(sid: str, payload: dict) -> None:
         _notify(sid, "signal", payload)
 
 
+def touch(s: _Screen) -> None:
+    """The screen's stream is still up (a ping went through): it counts as fresh."""
+    with _lock:
+        if _screens.get(s.id) is s:
+            s.updated = time.time()
+
+
+def watcher_count(sid: str) -> int:
+    with _lock:
+        return len(_watchers.get(sid, ()))
+
+
+def _tell_watchers(sid: str) -> None:
+    # The screen only streams its state over HTTP while someone is watching it.
+    send_command(sid, {"type": "watchers", "n": watcher_count(sid)})
+
+
 def watch(sid: str) -> tuple[queue.Queue, dict | None]:
     q: queue.Queue = queue.Queue(maxsize=100)
     with _lock:
         _watchers.setdefault(sid, set()).add(q)
         s = _screens.get(sid)
-        return q, (_public(s) if s else None)
+        current = _public(s) if s else None
+    _tell_watchers(sid)
+    return q, current
 
 
 def unwatch(sid: str, q: queue.Queue) -> None:
@@ -113,3 +134,4 @@ def unwatch(sid: str, q: queue.Queue) -> None:
             ws.discard(q)
             if not ws:
                 del _watchers[sid]
+    _tell_watchers(sid)
